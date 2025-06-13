@@ -1,7 +1,7 @@
 import torch
 torch.set_default_dtype(torch.float64)
 
-from plot_results import plot_results
+from plot_results import plot_results_with_paths
 
 def x_unnorm_schwe(x):
     '''transform from 0,1 to actual range
@@ -55,4 +55,4 @@ if __name__=='__main__':
         x = [torch.tensor(xi) for xi in x]
         return schwefel(*x).detach().numpy()
 
-    plot_results(schwefel_numpy, minima=None, bounds=(0,1), saddle_points=None, res=50)
+    plot_results_with_paths(schwefel_numpy, minima=None, bounds=(0,1), saddle_points=None, res=50)
