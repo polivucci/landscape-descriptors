@@ -7,28 +7,34 @@ from plot_results import plot_results_with_paths
 
 torch.set_default_dtype(torch.float64)
 
-
-def find_unstable_direction(saddle_point):
+def offset_near_saddle(saddle_point, epsilon=0.01):
     """
-    Compute Hessian and find the most negative curvature direction (unstable mode)
+    Offset the saddle point along its most unstable direction,
+    scaled by radius of curvature (1 / |eigenvalue|).
     """
-    saddle_point = saddle_point.clone().detach().requires_grad_(True) #Makes a copy of the input so the original isn't modified.
-    func = lambda x: schwefel(x[0], x[1]) #Gives Function value mentioned in Test Function
-    hessian = torch.autograd.functional.hessian(func, saddle_point) # Finding Hessian to get the Eigen Vector and Eigen Values
-    eigvals, eigvecs = torch.linalg.eigh(hessian) #computes the eigenvalues and eigenvectors of the Hessian matrix using symmetric eigenvalue decomposition.
-    return eigvecs[:, 0]  # Direction of most negative eigenvalue
+    point = saddle_point.clone().detach().requires_grad_(True)
+    func = lambda x: schwefel(x[0], x[1])
+    
+    # Compute Hessian
+    hessian = torch.autograd.functional.hessian(func, point)
+    
+    # Eigendecomposition
+    eigvals, eigvecs = torch.linalg.eigh(hessian)
+    
+    # Get most negative eigenvalue and its eigenvector (unstable direction)
+    unstable_idx = torch.argmin(eigvals)
+    unstable_eigval = eigvals[unstable_idx]
+    unstable_direction = eigvecs[:, unstable_idx]
 
+    # Radius of curvature = 1 / |λ|
+    radius_of_curvature = 1.0 / torch.abs(unstable_eigval)
 
-def offset_near_saddle(saddle_point, direction, radius):
-    """
-    Offset saddle point slightly along unstable direction we used Curvature radius
-    radius: how far to offset the point (this is "curvature radius").
-    """
-    direction = direction / torch.norm(direction) #Normalizes the direction vector, so it has unit length
-    #Returns two new points: One slightly forward along the direction. One slightly backward along the direction.
-    return saddle_point + radius * direction, saddle_point - radius * direction 
+    # Offset distance = ε * radius_of_curvature
+    offset_distance = epsilon * radius_of_curvature
 
-
+    # Offset along unstable direction
+    direction = unstable_direction / torch.norm(unstable_direction)
+    return saddle_point + offset_distance * direction, saddle_point - offset_distance * direction
 
 
 def optimize_lbfgs(start_point, func, max_iter=100):
@@ -58,20 +64,13 @@ def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
     closest_idx = dists.idxmin()
     return minima_df.loc[closest_idx][["x1", "x2"]].tolist(), dists.min() < threshold
 
-def trace_from_saddle(saddle_point, minima_df, radius=0.01):
+def trace_from_saddle(saddle_point, minima_df):
     """
     Given a saddle point, trace descent on both sides and match to known minima
-    Radius: how far to offset the point (Curvature Radius)
-    I tried 3 values
-    0.01: Initial value that I took
-    0.001: A complete new result
-    1e-6: Different result from previous two
-
-    What i noted is by decreasing the value of curvature radius we got more connections with minima as "Yes" in results.
     """
     saddle_point = torch.tensor(saddle_point, dtype=torch.float64)
-    unstable_direction = find_unstable_direction(saddle_point)
-    offset_p1, offset_p2 = offset_near_saddle(saddle_point, unstable_direction, radius)
+
+    offset_p1, offset_p2 = offset_near_saddle(saddle_point) #gets both offset point with curvature radius 
 
     func = lambda x: schwefel(x[0], x[1])
 
@@ -85,13 +84,13 @@ def trace_from_saddle(saddle_point, minima_df, radius=0.01):
     result = [ 
         {
             "saddle_point": tuple(saddle_point.tolist()),
-            # "minima found":tuple(float(x) for x in minima1), Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
+            "descent":tuple(float(x) for x in minima1), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
             "minimizer": tuple(float(x) for x in min1_coords),
             "is_connected": "yes" if connected1 else "no"
         },
         {
             "saddle_point": tuple(saddle_point.tolist()),
-            # "minima found":tuple(float(x) for x in minima2), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
+            "descent":tuple(float(x) for x in minima2), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
             "minimizer": tuple(float(x) for x in min2_coords),
             "is_connected": "yes" if connected2 else "no",
         }
