@@ -4,6 +4,7 @@ import numpy as np
 from torch.optim import LBFGS
 from schwefel_function import schwefel  # Replace with your actual import
 from plot_results import plot_results_with_paths
+from plot_results import plot_saddle_tree_with_function
 
 torch.set_default_dtype(torch.float64)
 
@@ -45,15 +46,20 @@ def optimize_lbfgs(start_point, func, max_iter=100):
 
     optimizer = LBFGS([x], max_iter=max_iter, line_search_fn="strong_wolfe") #Initializes the L-BFGS optimizer in PyTorch
 
+    trajectory = [x.detach().clone().numpy()]  # Start with initial point    
+
     def closure(): #Closure required because LBFGS evaluates the function multiple times during each iteration.
         optimizer.zero_grad()
         loss = func(x)
         loss.backward()
         return loss
     
-    optimizer.step(closure)  # Triggers one full optimization run using the closure
+    for _ in range(max_iter):
+        optimizer.step(closure) # Triggers one full optimization run using the closure
+        trajectory.append(x.detach().clone().numpy()) #Appends each trajectory point
+    
 
-    return x.detach()
+    return x.detach(), trajectory  # Return both final point and path
 
 
 def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
@@ -63,6 +69,12 @@ def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
     dists = minima_df.apply(lambda r: np.linalg.norm(min_point.numpy() - np.array([r["x1"], r["x2"]])), axis=1)
     closest_idx = dists.idxmin()
     return minima_df.loc[closest_idx][["x1", "x2"]].tolist(), dists.min() < threshold
+
+def trajectory_length(traj):
+    """
+    Get Total length of the trajectory for the actual Descent path
+    """
+    return sum(np.linalg.norm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
 
 def trace_from_saddle(saddle_point, minima_df):
     """
@@ -74,39 +86,57 @@ def trace_from_saddle(saddle_point, minima_df):
 
     func = lambda x: schwefel(x[0], x[1])
 
-    minima1 = optimize_lbfgs(offset_p1, func)   #Optimzation to find Minima of a Saddle point offset 1
-    minima2 = optimize_lbfgs(offset_p2, func)   #Optimzation to find Minima of a Saddle point offset 2
+    saddle_value = func(saddle_point).item() #Get exact saddle value for plotting on tree
+    minima1, traj1 = optimize_lbfgs(offset_p1, func)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
+    minima2, traj2 = optimize_lbfgs(offset_p2, func)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 2
+
+    arrival1_val = func(minima1).item() # Minimizer Function value of minima1
+    arrival2_val = func(minima2).item() # Minimizer Function value of minima2
 
     min1_coords, connected1 = compare_to_known_minima(minima1, minima_df)   #Comparing Minima1 from Optimizer with known Minima from CSV
     min2_coords, connected2 = compare_to_known_minima(minima2, minima_df)   #Comparing Minima2 from Optimizer with known Minima from CSV
+
+    length1 = trajectory_length(traj1) #calculating total length of the trajectory for offset 1
+    length2 = trajectory_length(traj2) #calculating total length of the trajectory for offset 1
 
     #Making table for results found
     result = [ 
         {
             "saddle_point": tuple(saddle_point.tolist()),
+            "saddle_value": saddle_value,
             "descent":tuple(float(x) for x in minima1), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
             "minimizer": tuple(float(x) for x in min1_coords),
+            "min_value": arrival1_val,
+            "trajectory_length": length1,
             "is_connected": "yes" if connected1 else "no"
         },
         {
             "saddle_point": tuple(saddle_point.tolist()),
+            "saddle_value": saddle_value,
             "descent":tuple(float(x) for x in minima2), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
             "minimizer": tuple(float(x) for x in min2_coords),
+            "min_value": arrival2_val,
+            "trajectory_length": length2,
             "is_connected": "yes" if connected2 else "no",
         }
     ]
     # Storing path data for visualizing further
     connected_minimizers = []
+    trajectories = []
     if connected1:
         connected_minimizers.append(tuple(minima1.tolist()))
+        trajectories.append(traj1)
     if connected2:
         connected_minimizers.append(tuple(minima2.tolist()))
+        trajectories.append(traj2)
+
     path_data = None
     # print(connected_minimizers)
     if connected_minimizers:
         path_data = {
             "saddle": tuple(saddle_point.tolist()),
-            "minimizers": connected_minimizers
+            "minimizers": connected_minimizers,
+            "trajectories": trajectories
         }
 
     return result,path_data
@@ -128,11 +158,15 @@ def main():
         if path_data is not None:
             paths.append(path_data)
 
+    global_minima = [
+    ( (row["x1"], row["x2"]), row["f_value"] )
+    for _, row in minima_df.iterrows()
+    ]
     # Output results
     result_df = pd.DataFrame(all_results)
     result_df.to_csv("saddle_to_minima_connections.csv", index=False)
     print(result_df.head(24))
-
+    plot_saddle_tree_with_function(all_results, global_minima=global_minima)
     
 if __name__ == "__main__":
     main()
