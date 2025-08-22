@@ -46,13 +46,21 @@ def f_hessian(func, *vars):
     h = torch.autograd.functional.hessian(func, vars, strict=True)
     return torch.tensor(h)
 
+def schwefel_numpy(x):
+    x = [torch.tensor(xi) for xi in x]
+    return schwefel(*x).detach().numpy()
 
 if __name__=='__main__':
 
-    # Convert to numpy and Plot the function:
+    import matplotlib.pyplot as plt
 
-    def schwefel_numpy(x):
-        x = [torch.tensor(xi) for xi in x]
-        return schwefel(*x).detach().numpy()
+    fig2 = plt.figure(figsize=(5, 4), dpi=160)
 
-    plot_results_with_paths(schwefel_numpy, minima=None, bounds=(0,1), saddle_points=None, res=50)
+    # Convert to numpy and plot the function:
+    plot_results_with_paths(schwefel_numpy, 
+                            critical_points_csv=None, 
+                            saddle_to_minima_csv=None, 
+                            bounds=(0, 1), 
+                            res=200, 
+                            fig=fig2,
+    )

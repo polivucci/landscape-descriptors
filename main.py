@@ -223,10 +223,6 @@ def main():
     ]
 
     return all_results, minima, dataframe    
-    
-def schwefel_numpy(x):
-    x = [torch.tensor(xi) for xi in x]
-    return schwefel(*x).detach().numpy()
 
 if __name__ == "__main__":
     main()
