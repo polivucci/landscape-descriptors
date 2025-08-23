@@ -37,15 +37,12 @@ def plot_results_with_paths(func, critical_points_csv,
         fig = plt.figure(figsize=(6, 6))
 
     ax = fig.gca()
-    # Load data 
-    crit_df = pd.read_csv(critical_points_csv)
-    conn_df = pd.read_csv(saddle_to_minima_csv)
 
     # Set up grid and evaluate function
     x = np.linspace(bounds[0], bounds[1], res)
     y = np.linspace(bounds[0], bounds[1], res)
     X, Y = np.meshgrid(x, y, indexing='ij')
-    Z = np.array([[func((x, y)) for x, y in zip(row_x, row_y)]
+    Z = np.array([[func(x, y) for x, y in zip(row_x, row_y)]
                   for row_x, row_y in zip(X, Y)])
 
     # 2D Contour plot
@@ -53,43 +50,48 @@ def plot_results_with_paths(func, critical_points_csv,
     contour = ax.contourf(X, Y, Z, levels=20, cmap=cmap)
     fig.colorbar(contour, label='Function Value')
 
-    # Extracting the indices which are connected
-    saddle_indices = conn_df['index_saddle'].unique()
-    minima_indices = conn_df['index_minimum'].unique()
+    if critical_points_csv is not None and saddle_to_minima_csv is not None:
+        # Load data 
+        crit_df = pd.read_csv(critical_points_csv)
+        conn_df = pd.read_csv(saddle_to_minima_csv)
 
-    minima_coords = []
-    saddle_coords = []
+        # Extracting the indices which are connected
+        saddle_indices = conn_df['index_saddle'].unique()
+        minima_indices = conn_df['index_minimum'].unique()
 
-    # Plot minima with labels
-    for i in minima_indices:
-        row = crit_df.iloc[i]
-        point = (row['x1'], row['x2'])
-        minima_coords.append(point)
-        ax.text(point[0] + 0.015, point[1] + 0.015, f"M{i}", fontsize=8, color=text_color)
-    
-    minima_coords = np.array(minima_coords)
-    ax.scatter(minima_coords[:, 0], minima_coords[:, 1],
-           c=minima_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Minima')
+        minima_coords = []
+        saddle_coords = []
+
+        # Plot minima with labels
+        for i in minima_indices:
+            row = crit_df.iloc[i]
+            point = (row['x1'], row['x2'])
+            minima_coords.append(point)
+            ax.text(point[0] + 0.015, point[1] + 0.015, f"M{i}", fontsize=8, color=text_color)
         
-    # Plot saddle points with labels
-    for i in saddle_indices:
-        row = crit_df.iloc[i]
-        point = (row['x1'], row['x2'])
-        saddle_coords.append(point)
-        ax.text(point[0] + 0.015, point[1] + 0.015, f"S{i}", fontsize=8, color=text_color)
+        minima_coords = np.array(minima_coords)
+        ax.scatter(minima_coords[:, 0], minima_coords[:, 1],
+            c=minima_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Minima')
+            
+        # Plot saddle points with labels
+        for i in saddle_indices:
+            row = crit_df.iloc[i]
+            point = (row['x1'], row['x2'])
+            saddle_coords.append(point)
+            ax.text(point[0] + 0.015, point[1] + 0.015, f"S{i}", fontsize=8, color=text_color)
 
-    saddle_coords = np.array(saddle_coords)
-    ax.scatter(saddle_coords[:, 0], saddle_coords[:, 1],
-            c=saddle_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Saddles')
+        saddle_coords = np.array(saddle_coords)
+        ax.scatter(saddle_coords[:, 0], saddle_coords[:, 1],
+                c=saddle_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Saddles')
 
-    # Plot descent paths
-    for _, row in conn_df.iterrows():
-        s_row = crit_df.iloc[int(row['index_saddle'])]
-        m_row = crit_df.iloc[int(row['index_minimum'])]
-        saddle = (s_row['x1'], s_row['x2'])
-        minimum = (m_row['x1'], m_row['x2'])
-        ax.annotate('', xy=minimum, xytext=saddle,
-                    arrowprops=dict(arrowstyle='->', color=edge_color))
+        # Plot descent paths
+        for _, row in conn_df.iterrows():
+            s_row = crit_df.iloc[int(row['index_saddle'])]
+            m_row = crit_df.iloc[int(row['index_minimum'])]
+            saddle = (s_row['x1'], s_row['x2'])
+            minimum = (m_row['x1'], m_row['x2'])
+            ax.annotate('', xy=minimum, xytext=saddle,
+                        arrowprops=dict(arrowstyle='->', color=edge_color))
 
     fig.tight_layout()
     return fig
