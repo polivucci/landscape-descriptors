@@ -154,8 +154,6 @@ def save_descent_paths(paths):
     """
     base_dir = "descent_paths"
     os.makedirs(base_dir, exist_ok=True)
-    os.makedirs(os.path.join(base_dir, "2d_paths"), exist_ok=True)
-    os.makedirs(os.path.join(base_dir, "3d_paths"), exist_ok=True)
     for path in paths:
         saddle_idx = path.get("saddle_id")
         minima_indices = path.get("minima_id", [])
@@ -166,10 +164,8 @@ def save_descent_paths(paths):
             dim = len(traj[0]) if traj else 0
             columns = [f"x{i}" for i in range(dim)]
             df = pd.DataFrame(traj, columns=columns)
-            subfolder = "2d_paths" if dim == 2 else "3d_paths" if dim == 3 else "other"
-            os.makedirs(os.path.join(base_dir, subfolder), exist_ok=True)
             filename = f"descent_path_S{saddle_idx}_M{min_idx}.csv"
-            filepath = os.path.join(base_dir, subfolder, filename)
+            filepath = os.path.join(base_dir, filename)
             df.to_csv(filepath, index=False)
 
 def extract_connection_indices(all_results, critical_points_df):

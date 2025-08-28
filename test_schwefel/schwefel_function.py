@@ -11,6 +11,10 @@ def y_norm_schwe(x):
     '''
     return x / 1000.0
 
+class Schwefel1D(object):
+    def __init__(self, x1):
+        self.x1 = x1
+
 class Schwefel2D(object):
     def __init__(self, x1, x2):
         self.x1 = x1
@@ -43,7 +47,14 @@ def eval_schwefel(schwefel_object):
     xs = [var for var in vars(schwefel_object).values()]
     return _schwefel(*xs)
 
-def schwefel(*x):
+def schwefel1D(*x):
+    '''Schwefel 2 dimensions
+    '''
+    vars = [x_unnorm_schwe(xi) for xi in x]
+    schwe = Schwefel1D(*vars)
+    return y_norm_schwe(eval_schwefel(schwe))
+
+def schwefel2D(*x):
     '''Schwefel 2 dimensions
     '''
     vars = [x_unnorm_schwe(xi) for xi in x]
@@ -57,6 +68,13 @@ def schwefel3D(*x):
     schwe = Schwefel3D(*vars)
     return y_norm_schwe(eval_schwefel(schwe))
 
+def schwefel4D(*x):
+    '''Schwefel 4 dimensions
+    '''
+    vars = [x_unnorm_schwe(xi) for xi in x]
+    schwe = Schwefel4D(*vars)
+    return y_norm_schwe(eval_schwefel(schwe))
+
 # Hessian of generic function f
 def f_hessian(func, *vars):
     if not all([var.requires_grad for var in vars]): 
@@ -64,14 +82,17 @@ def f_hessian(func, *vars):
     h = torch.autograd.functional.hessian(func, vars, strict=True)
     return torch.tensor(h)
 
-def schwefel_numpy(*x):
+def schwefel2D_numpy(*x):
     x = [torch.tensor(xi) for xi in x]
-    return schwefel(*x).detach().numpy()
+    return schwefel2D(*x).detach().numpy()
 
 def schwefel3D_numpy(*x):
     x = [torch.tensor(xi) for xi in x]
     return schwefel3D(*x).detach().numpy()
 
+def schwefel4D_numpy(*x):
+    x = [torch.tensor(xi) for xi in x]
+    return schwefel4D(*x).detach().numpy()
 
 if __name__=='__main__':
 

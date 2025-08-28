@@ -99,29 +99,16 @@ def plot_results_with_paths_3d(func, critical_points_csv,
                                saddle_to_minima_csv, bounds=(0, 1),
                                res=50, fig=None, slice_levels=[0.25, 0.5, 0.75]):
     """
-    3D plot of the function landscape with labeled minima, saddle points, and descent paths.
+    3D plot of the function labeled minima, saddle points, and descent paths.
     Supports functions of the form func(x, y, z).
     """
 
     if fig is None:
         fig = plt.figure(figsize=(10, 8))
 
-    ax = fig.add_subplot(111, projection='3d')
-    ax.set_facecolor('pink')
-
-    # Evaluate the function over a 3D grid
-    x = np.linspace(bounds[0], bounds[1], res)
-    y = np.linspace(bounds[0], bounds[1], res)
-    z = np.linspace(bounds[0], bounds[1], res)
-
-    xx, yy, zz = np.meshgrid(x, y, z, indexing='ij')
-    f_vals = np.zeros_like(xx)
-
-    for i in range(res):
-        for j in range(res):
-            for k in range(res):
-                f_vals[i, j, k] = func(xx[i, j, k], yy[i, j, k], zz[i, j, k])
-
+    ax = fig.add_subplot(111, projection='3d', )
+    ax.set_proj_type('ortho')
+    # ax.set_facecolor('pink')
    
     if critical_points_csv is not None and saddle_to_minima_csv is not None:
         crit_df = pd.read_csv(critical_points_csv)
@@ -134,15 +121,17 @@ def plot_results_with_paths_3d(func, critical_points_csv,
         for i in minima_indices:
             row = crit_df.iloc[i]
             coords = [row[col] for col in sorted(row.index) if col.startswith("x")]
-            ax.scatter(*coords, color=minima_color, s=50, label='Minima' if i == minima_indices[0] else "")
-            ax.text(*coords, f"M{i}", fontsize=9, color=text_color)
+            ax.scatter(*coords, color=minima_color, edgecolor=edge_color, s=50, label='Minima' if i == minima_indices[0] else "")
+            textcoords = [coord+0.02 for coord in coords]
+            ax.text(*textcoords, f"M{i}", fontsize=9, color=text_color)
 
         # Plot saddles
         for i in saddle_indices:
             row = crit_df.iloc[i]
             coords = [row[col] for col in sorted(row.index) if col.startswith("x")]
-            ax.scatter(*coords, color=saddle_color, s=50, label='Saddle' if i == saddle_indices[0] else "")
-            ax.text(*coords, f"S{i}", fontsize=9, color=text_color)
+            ax.scatter(*coords, color=saddle_color, edgecolor=edge_color, s=50, label='Saddle' if i == saddle_indices[0] else "")
+            textcoords = [coord+0.02 for coord in coords]
+            ax.text(*textcoords, f"S{i}", fontsize=9, color=text_color)
 
         # Plot descent paths
         for _, row in conn_df.iterrows():
