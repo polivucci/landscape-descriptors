@@ -146,13 +146,6 @@ def plot_results_with_paths_3d(func, critical_points_csv,
                     [s_coords[2], m_coords[2]],
                     color=edge_color, linestyle='--')
 
-    ax.set_xlabel('x')
-    ax.set_ylabel('y')
-    ax.set_zlabel('z')
-
-    ax.set_title('3D Function Landscape with Saddles, Minima, and Paths')
-    ax.legend(loc='best')
-    plt.tight_layout()
     return fig
 
  # for zl in slice_levels:
@@ -170,12 +163,10 @@ def plot_results_with_paths_3d(func, critical_points_csv,
     # #     cs = ax.contourf(yy[h], zz[h], f_vals[h], zdir='x', offset=x[h], alpha=0.5, cmap='viridis')
 
 def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None):
-    
 
     # Read node and edge data
     nodes_df = pd.read_csv(nodes_csv)
     edges_df = pd.read_csv(edges_csv)
-
     
     # --- Plotting ---
     if fig is None:
@@ -185,6 +176,8 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None):
 
     x_pos = dict(zip(nodes_df["index"], nodes_df["order"]))
     y_val = dict(zip(nodes_df["index"], nodes_df["f_value"]))
+    yrange = nodes_df["f_value"].max()-nodes_df["f_value"].min()
+    xrange = nodes_df["index"].max()
 
     saddle_label_added = False
     minima_label_added = False
@@ -205,16 +198,16 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None):
         if point_type == "saddle":
             ax.scatter(x, y, color=saddle_color, edgecolor=edge_color, s=50, zorder=3,
                        label="Saddle" if not saddle_label_added else "")
-            ax.text(x, y + 0.025, f"S{idx}", ha="center", fontsize=8, color=text_color)
+            ax.text(x+0.05*xrange, y, f"S{idx}", ha="left", va="center",  fontsize=8, color=text_color)
             saddle_label_added = True
         elif point_type == "minimum":
             ax.scatter(x, y, color=minima_color, edgecolor=edge_color, s=50, zorder=3,
                        label="Minima" if not minima_label_added else "")
-            ax.text(x, y - 0.05, f"M{idx}", ha="center", fontsize=8, color=text_color)
+            ax.text(x, y - 0.05*yrange, f"M{idx}", ha="center", fontsize=8, color=text_color)
             minima_label_added = True
 
-    ax.grid(True, linestyle="--", alpha=0.3)
-    ax.yaxis.set_major_locator(MaxNLocator(10))
-    fig.tight_layout()
+    ax.grid(True, linestyle="--", alpha=0.4, axis='y')
+    ax.set_xticks([])
+    ax.spines[['top', 'right', 'bottom']].set_visible(False)
     
     return fig
