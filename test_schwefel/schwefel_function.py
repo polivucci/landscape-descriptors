@@ -1,15 +1,6 @@
 import torch
 torch.set_default_dtype(torch.float64)
 import matplotlib.pyplot as plt
-def x_unnorm_schwe(x):
-    '''transform from 0,1 to actual range
-    '''
-    return (x * 450.0) + 50.0
-
-def y_norm_schwe(x):
-    '''normalise outputs
-    '''
-    return x / 1000.0
 
 class Schwefel1D(object):
     def __init__(self, x1):
@@ -34,46 +25,45 @@ class Schwefel4D(object):
         self.x4 = x4
 
 def _schwefel(*x):
-    '''Schwefel function in N dimensions
+    '''Schwefel function in N dimensions.
+    The Schwefel function has m^N minima on the interval [a,b]^N, where m is the number of minima in 1D on [a,b]. 
+    For instance in the interval [50,500]^N it has 3^N minima.
     '''
-    xx = list(x)
+    xx = [(xi * 450.0) + 50.0 for xi in x] # transform from 0,1 to actual range
     for i, xi in enumerate(x):
         if not isinstance(xi, torch.Tensor):
             xx[i] = torch.tensor(xx[i], requires_grad=True)
     flat_x = torch.cat([xi.reshape(-1) for xi in xx])
-    return 418.9829 * len(x) - torch.sum(flat_x * torch.sin(torch.sqrt(torch.abs(flat_x))))
+    # return normalised to 1000
+    return ( 418.9829 * len(x) - torch.sum(flat_x * torch.sin(torch.sqrt(torch.abs(flat_x)))) ) * 1e-3
 
 def eval_schwefel(schwefel_object):
     xs = [var for var in vars(schwefel_object).values()]
     return _schwefel(*xs)
 
 def schwefel1D(*x):
-    '''Schwefel 2 dimensions
+    '''Schwefel 1 dimension
     '''
-    vars = [x_unnorm_schwe(xi) for xi in x]
-    schwe = Schwefel1D(*vars)
-    return y_norm_schwe(eval_schwefel(schwe))
+    schwe = Schwefel1D(*x)
+    return eval_schwefel(schwe)
 
 def schwefel2D(*x):
     '''Schwefel 2 dimensions
     '''
-    vars = [x_unnorm_schwe(xi) for xi in x]
-    schwe = Schwefel2D(*vars)
-    return y_norm_schwe(eval_schwefel(schwe))
+    schwe = Schwefel2D(*x)
+    return eval_schwefel(schwe)
 
 def schwefel3D(*x):
     '''Schwefel 3 dimensions
     '''
-    vars = [x_unnorm_schwe(xi) for xi in x]
-    schwe = Schwefel3D(*vars)
-    return y_norm_schwe(eval_schwefel(schwe))
+    schwe = Schwefel3D(*x)
+    return eval_schwefel(schwe)
 
 def schwefel4D(*x):
     '''Schwefel 4 dimensions
     '''
-    vars = [x_unnorm_schwe(xi) for xi in x]
-    schwe = Schwefel4D(*vars)
-    return y_norm_schwe(eval_schwefel(schwe))
+    schwe = Schwefel4D(*x)
+    return eval_schwefel(schwe)
 
 # Hessian of generic function f
 def f_hessian(func, *vars):
