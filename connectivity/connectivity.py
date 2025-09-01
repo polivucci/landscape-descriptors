@@ -15,7 +15,7 @@ def offset_near_saddle(saddle_point, func, epsilon=0.01):
 
     # Compute Hessian
     hessian = torch.autograd.functional.hessian(func, point)
-    # print(hessian)
+
     # Eigendecomposition
     eigvals, eigvecs = torch.linalg.eigh(hessian)
     
@@ -35,7 +35,7 @@ def offset_near_saddle(saddle_point, func, epsilon=0.01):
     return saddle_point + offset_distance * direction, saddle_point - offset_distance * direction
 
 
-def optimize_lbfgs(start_point, func, max_iter=100):
+def optimize_lbfgs(start_point, func, max_iter=100, atol=1e-6, rtol=1e-5):
     """
     Optimize using PyTorch LBFGS to find local minimum
     """
@@ -43,19 +43,35 @@ def optimize_lbfgs(start_point, func, max_iter=100):
 
     optimizer = LBFGS([x], max_iter=max_iter, line_search_fn="strong_wolfe") #Initializes the L-BFGS optimizer in PyTorch
 
-    trajectory = []  # Start with initial point    
+    trajectory = []  # Start with initial point 
+    prev_x = x.detach().clone()
 
     def closure(): #Closure required because LBFGS evaluates the function multiple times during each iteration.
-        optimizer.zero_grad()
-        loss = func(x)
-        loss.backward()
-        trajectory.append(x.detach().clone().numpy()) #Appends each trajectory point
-        return loss
-    
-    for _ in range(max_iter):
-        optimizer.step(closure) # Triggers one full optimization run using the closure
+            optimizer.zero_grad()
+            loss = func(x)
+            loss.backward()
+            fval = float(func(x).item())
+            trajectory.append((x.detach().clone().numpy(), fval)) #Appends each trajectory point
+            return loss
+    for i in range(max_iter):
+        optimizer.step(closure)
         
-    trajectory.append(x.detach().clone().numpy())
+    # stopping criterion
+        try:
+            torch.testing.assert_close(
+                x.detach(), prev_x, atol=atol, rtol=rtol
+            )
+            # if assert_close passes, we break early
+            break
+        except AssertionError:
+            pass
+
+        prev_x = x.detach().clone()
+    
+    # for _ in range(max_iter):
+    #     optimizer.step(closure) # Triggers one full optimization run using the closure
+        
+    
     return x.detach(), trajectory  # Return both final point and path
 
 
@@ -83,7 +99,7 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, func):
     Given a saddle point, trace descent on both sides and match to known minima
     """
     saddle_point = torch.tensor(saddle_point, dtype=torch.float64)
-    # print(saddle_point)
+
     offset_p1, offset_p2 = offset_near_saddle(saddle_point, func) #gets both offset point with curvature radius 
 
 
@@ -97,8 +113,8 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, func):
     min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df)   #Comparing Minima1 from Optimizer with known Minima from CSV
     min2_coords, connected2, idx_minima2 = compare_to_known_minima(minima2, minima_df)   #Comparing Minima2 from Optimizer with known Minima from CSV
 
-    length1 = trajectory_length(traj1) #calculating total length of the trajectory for offset 1
-    length2 = trajectory_length(traj2) #calculating total length of the trajectory for offset 1
+    length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
+    length2 = trajectory_length(traj2[0]) #calculating total length of the trajectory for offset 1
 
     #Making table for results found
     result = [ 
@@ -124,7 +140,7 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, func):
     # Storing path data for visualizing further
     connected_minimizers = []
     trajectories = []
-    minima_id =[]
+    minima_id =[] 
     if connected1:
         connected_minimizers.append(tuple(minima1.tolist()))
         trajectories.append(traj1)
@@ -143,7 +159,6 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, func):
             "saddle_id": idx_saddle,
             "minima_id": minima_id
         }
-
     return result,path_data
 
 def save_descent_paths(paths):
@@ -158,12 +173,15 @@ def save_descent_paths(paths):
         saddle_idx = path.get("saddle_id")
         minima_indices = path.get("minima_id", [])
         trajectories = path.get("trajectories", [])
-        
         for min_idx, traj in zip(minima_indices, trajectories):
-            traj = list(traj)
-            dim = len(traj[0]) if traj else 0
-            columns = [f"x{i}" for i in range(dim)]
-            df = pd.DataFrame(traj, columns=columns)
+            rows = []
+            for coords, loss in traj:
+                row = list(coords) + [loss]
+                rows.append(row)
+
+            dim = len(traj[0][0]) if traj else 0
+            columns = [f"x{i}" for i in range(dim)] + ["loss"]
+            df = pd.DataFrame(rows, columns=columns)
             filename = f"descent_path_S{saddle_idx}_M{min_idx}.csv"
             filepath = os.path.join(base_dir, filename)
             df.to_csv(filepath, index=False)
@@ -225,7 +243,6 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, return_paths=Fals
         saddle_point = [row[col] for col in sorted(row.index) if col.startswith("x")]
 
         results,path_data = trace_from_saddle(saddle_point, minima_df, idx, func)
-        # print(func)
         all_results.extend(results)
         if path_data is not None:
             paths.append(path_data)
