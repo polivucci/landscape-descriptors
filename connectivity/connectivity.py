@@ -2,6 +2,7 @@ import torch
 import pandas as pd
 import numpy as np
 from torch.optim import LBFGS
+from test_schwefel.schwefel_function_nnmodule import Schwefel2D
 import os
 
 torch.set_default_dtype(torch.float64)
@@ -35,44 +36,51 @@ def offset_near_saddle(saddle_point, func, epsilon=0.01):
     return saddle_point + offset_distance * direction, saddle_point - offset_distance * direction
 
 
-def optimize_lbfgs(start_point, func, max_iter=100, atol=1e-6, rtol=1e-5):
+def optimize_lbfgs(model ,loss_fn , max_iter=100, atol=1e-6, rtol=1e-5):
     """
     Optimize using PyTorch LBFGS to find local minimum
     """
-    x = start_point.clone().detach().requires_grad_(True) # Makes a copy of the input so the original isn't modified.
+    # Make sure model params require grad
+    for p in model.parameters():
+        p.requires_grad_(True)
 
-    optimizer = LBFGS([x], max_iter=max_iter, line_search_fn="strong_wolfe") #Initializes the L-BFGS optimizer in PyTorch
+    # x = start_point.clone().detach().requires_grad_(True) # Makes a copy of the input so the original isn't modified.
+
+    # optimizer = LBFGS([x], max_iter=max_iter, line_search_fn="strong_wolfe") #Initializes the L-BFGS optimizer in PyTorch
+    optimizer = LBFGS(model.parameters(), max_iter=max_iter, line_search_fn="strong_wolfe")
 
     trajectory = []  # Start with initial point 
-    prev_x = x.detach().clone()
+    prev_coords = model.forward().detach().clone()
 
     def closure(): #Closure required because LBFGS evaluates the function multiple times during each iteration.
             optimizer.zero_grad()
-            loss = func(x)
+            coords = model()
+            loss = loss_fn(coords)
             loss.backward()
-            fval = float(func(x).item())
-            trajectory.append((x.detach().clone().numpy(), fval)) #Appends each trajectory point
+            fval = float(loss.item())
+            trajectory.append((coords.detach().cpu().numpy(), fval)) #Appends each trajectory point
             return loss
-    for i in range(max_iter):
+    
+    for _ in range(max_iter):
         optimizer.step(closure)
         
     # stopping criterion
         try:
             torch.testing.assert_close(
-                x.detach(), prev_x, atol=atol, rtol=rtol
+                model.forward().detach(), prev_coords, atol=atol, rtol=rtol
             )
             # if assert_close passes, we break early
             break
         except AssertionError:
             pass
 
-        prev_x = x.detach().clone()
+        prev_coords = model.forward().detach().clone()
     
     # for _ in range(max_iter):
     #     optimizer.step(closure) # Triggers one full optimization run using the closure
         
     
-    return x.detach(), trajectory  # Return both final point and path
+    return model.forward().detach(), trajectory  # Return both final point and path
 
 
 def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
@@ -94,21 +102,24 @@ def trajectory_length(traj):
     """
     return sum(np.linalg.norm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
 
-def trace_from_saddle(saddle_point, minima_df, idx_saddle, func):
+def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn):
     """
     Given a saddle point, trace descent on both sides and match to known minima
     """
     saddle_point = torch.tensor(saddle_point, dtype=torch.float64)
 
-    offset_p1, offset_p2 = offset_near_saddle(saddle_point, func) #gets both offset point with curvature radius 
+    offset_p1, offset_p2 = offset_near_saddle(saddle_point, loss_fn) #gets both offset point with curvature radius 
 
 
-    saddle_value = func(saddle_point).item() #Get exact saddle value for plotting on tree
-    minima1, traj1 = optimize_lbfgs(offset_p1, func)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
-    minima2, traj2 = optimize_lbfgs(offset_p2, func)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 2
+    saddle_value = loss_fn(saddle_point).item() #Get exact saddle value for plotting on tree
 
-    arrival1_val = func(minima1).item() # Minimizer Function value of minima1
-    arrival2_val = func(minima2).item() # Minimizer Function value of minima2
+    model1 = Schwefel2D(offset_p1[0].item(), offset_p1[1].item())
+    minima1, traj1 = optimize_lbfgs(model1, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
+    arrival1_val = loss_fn(minima1).item() # Minimizer Function value of minima1
+
+    model2 = Schwefel2D(offset_p2[0].item(), offset_p2[1].item())
+    minima2, traj2 = optimize_lbfgs(model2, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 2
+    arrival2_val = loss_fn(minima2).item() # Minimizer Function value of minima2
 
     min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df)   #Comparing Minima1 from Optimizer with known Minima from CSV
     min2_coords, connected2, idx_minima2 = compare_to_known_minima(minima2, minima_df)   #Comparing Minima2 from Optimizer with known Minima from CSV
