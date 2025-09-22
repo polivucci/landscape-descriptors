@@ -40,13 +40,6 @@ def optimize_lbfgs(model ,loss_fn , max_iter=100, atol=1e-6, rtol=1e-5):
     """
     Optimize using PyTorch LBFGS to find local minimum
     """
-    # Make sure model params require grad
-    for p in model.parameters():
-        p.requires_grad_(True)
-
-    # x = start_point.clone().detach().requires_grad_(True) # Makes a copy of the input so the original isn't modified.
-
-    # optimizer = LBFGS([x], max_iter=max_iter, line_search_fn="strong_wolfe") #Initializes the L-BFGS optimizer in PyTorch
     optimizer = LBFGS(model.parameters(), max_iter=max_iter, line_search_fn="strong_wolfe")
 
     trajectory = []  # Start with initial point 
@@ -76,10 +69,6 @@ def optimize_lbfgs(model ,loss_fn , max_iter=100, atol=1e-6, rtol=1e-5):
 
         prev_coords = model.forward().detach().clone()
     
-    # for _ in range(max_iter):
-    #     optimizer.step(closure) # Triggers one full optimization run using the closure
-        
-    
     return model.forward().detach(), trajectory  # Return both final point and path
 
 
@@ -102,7 +91,7 @@ def trajectory_length(traj):
     """
     return sum(np.linalg.norm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
 
-def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn):
+def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model):
     """
     Given a saddle point, trace descent on both sides and match to known minima
     """
@@ -110,14 +99,17 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn):
 
     offset_p1, offset_p2 = offset_near_saddle(saddle_point, loss_fn) #gets both offset point with curvature radius 
 
-
     saddle_value = loss_fn(saddle_point).item() #Get exact saddle value for plotting on tree
 
-    model1 = Schwefel2D(offset_p1[0].item(), offset_p1[1].item())
+    # Build models for each offset (for multiple dimension)
+    coords1 = [float(v) for v in offset_p1.tolist()]
+    coords2 = [float(v) for v in offset_p2.tolist()]
+
+    model1 = nn_model(*coords1)
     minima1, traj1 = optimize_lbfgs(model1, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
     arrival1_val = loss_fn(minima1).item() # Minimizer Function value of minima1
 
-    model2 = Schwefel2D(offset_p2[0].item(), offset_p2[1].item())
+    model2 = nn_model(*coords2)
     minima2, traj2 = optimize_lbfgs(model2, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 2
     arrival2_val = loss_fn(minima2).item() # Minimizer Function value of minima2
 
@@ -230,7 +222,7 @@ def extract_connection_indices(all_results, critical_points_df):
     df.to_csv(output_file, index=False)
     print(f"Saved {len(df)} connections to {output_file}")
 
-def trace_connectivity(saddles_df, minima_df, dataframe, func, return_paths=False):
+def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, return_paths=False ):
     """
     Trace connectivity from saddle points to minima.
 
@@ -240,6 +232,7 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, return_paths=Fals
         dataframe (pd.DataFrame): Critical point index map (e.g. critical_points.csv).
         func (callable): The target function, e.g., schwefel(x[0], x[1]).
         return_paths (bool): Whether to return full descent path data.
+        nn_model(Function); any given model
 
     Returns:
         all_results: list of saddle-to-minima connections.
@@ -253,7 +246,7 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, return_paths=Fals
     for idx, row in saddles_df.iterrows():
         saddle_point = [row[col] for col in sorted(row.index) if col.startswith("x")]
 
-        results,path_data = trace_from_saddle(saddle_point, minima_df, idx, func)
+        results,path_data = trace_from_saddle(saddle_point, minima_df, idx, func, nn_model)
         all_results.extend(results)
         if path_data is not None:
             paths.append(path_data)
