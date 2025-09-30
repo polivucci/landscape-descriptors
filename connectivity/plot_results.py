@@ -189,8 +189,7 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None):
         x2, y2 = x_pos[j] * 2, y_val[j]
         ax.plot([x1, x2], [y1, y2], color=edge_color, lw=1)
 
-
-    for idx, row in dataframe.iterrows():
+    for idx in nodes_df["index"].to_list():
         x = x_pos[idx] * 2
         y = y_val[idx]
 
