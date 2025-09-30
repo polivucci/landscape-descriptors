@@ -2,7 +2,6 @@ import torch
 import pandas as pd
 import numpy as np
 from torch.optim import LBFGS
-from test_schwefel.schwefel_function_nnmodule import Schwefel2D
 import os
 
 torch.set_default_dtype(torch.float64)

@@ -4,7 +4,6 @@ torch.set_default_dtype(torch.float64)
 
 # Import your scalar Schwefel loss from the existing module
 # It should accept a 1D tensor of shape (2,) and return a scalar tensor.
-from schwefel_function import _schwefel  # NOTE: keeping your given name
 
 class Schwefel2D(nn.Module):
     """
@@ -21,7 +20,7 @@ class Schwefel2D(nn.Module):
         # For ML consistency: return parameters as a vector
         return torch.stack([self.x1, self.x2])
 
-def schwefel_loss_2d(coords):
+def schwefel_loss_2d(*coords):
     """
     Wraps existing schwefel() into a torch-friendly loss function.
     """
@@ -42,7 +41,7 @@ class Schwefel3D(nn.Module):
         # For ML consistency: return parameters as a vector
         return torch.stack([self.x1, self.x2, self.x3])
 
-def schwefel_loss_3d(coords):
+def schwefel_loss_3d(*coords):
     """
     Wraps schwefel() into a torch-friendly loss function for 3D.
     """
@@ -65,9 +64,40 @@ class Schwefel4D(nn.Module):
         # For ML consistency: return parameters as a vector
         return torch.stack([self.x1, self.x2, self.x3, self.x4])
 
-def schwefel_loss_3d(coords):
+
+def _schwefel(*x):
+    '''Schwefel function in N dimensions.
+    The Schwefel function has m^N minima on the interval [a,b]^N, where m is the number of minima in 1D on [a,b]. 
+    For instance in the interval [50,500]^N it has 3^N minima.
+    '''
+    xx = [(xi * 450.0) + 50.0 for xi in x] # transform from 0,1 to actual range
+    for i, xi in enumerate(x):
+        if not isinstance(xi, torch.Tensor):
+            xx[i] = torch.tensor(xx[i], requires_grad=True)
+    flat_x = torch.cat([xi.reshape(-1) for xi in xx])
+    # return normalised to 1000
+    return ( 418.9829 * len(x) - torch.sum(flat_x * torch.sin(torch.sqrt(torch.abs(flat_x)))) ) * 1e-3
+
+def schwefel_loss_4d(*coords):
     """
     Wraps schwefel() into a torch-friendly loss function for 3D.
     """
     return _schwefel(coords[0], coords[1], coords[2], coords[3])
 
+
+def schwefel2D_numpy(*x):
+    # combined nnmodule+schwefel loss machinery
+    x = [torch.tensor(xi) for xi in x]
+    model = Schwefel2D(*x)
+    coords = model()                        # get parameters [x1, x2]
+    loss = _schwefel(*coords)                 # evaluate Schwefel loss
+    return float(loss.item())               # return scalar for NumPy
+
+
+def schwefel3D_numpy(*x):
+    x = [torch.tensor(xi) for xi in x]
+    return Schwefel3D(*x).forward().detach().numpy()
+
+def schwefel4D_numpy(*x):
+    x = [torch.tensor(xi) for xi in x]
+    return Schwefel4D(*x).forward().detach().numpy()
