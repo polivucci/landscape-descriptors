@@ -4,9 +4,11 @@ from connectivity.saddle_tree_utils import (
     build_saddle_minima_mapping,
     build_extra_edges,
     build_weight_matrix,
+    nonzero_indices,
     compute_mst,
     dfs_layout,
     spread_x_positions,
+    prune_graph,
     dfs_order,
     map_coords_to_indices,
     save_tree_edges_csv,
@@ -15,8 +17,12 @@ from connectivity.saddle_tree_utils import (
 from collections import defaultdict
 
 def saddle_tree_calculations(results, minima, dataframe):
+
     unique_saddles, unique_minima = get_unique_nodes(results, minima)
     saddle_y_values, minima_y_values = get_function_values(results, minima)
+    
+    all_nodes, all_values, all_types, index_map = map_coords_to_indices(unique_saddles, unique_minima, dataframe)
+
     # Build mapping from minima to saddles
     minima_to_saddles, saddle_to_minima = build_saddle_minima_mapping(
         results, unique_minima, unique_saddles
@@ -24,34 +30,36 @@ def saddle_tree_calculations(results, minima, dataframe):
 
     # STEP 1: Connect saddles that share the same minimum
     # STEP 2: For each saddle, connect its neighbors that have >= function value
-    extra_edges = build_extra_edges(minima_to_saddles, saddle_y_values)
-   
+    extra_edges = build_extra_edges(minima_to_saddles, unique_saddles, saddle_y_values)
+    # extra_edges, all_nodes = build_extra_edges(minima_to_saddles, saddle_to_minima, saddle_y_values)
     
      # --- Step 3: Build connectivity matrix and compute MST ---
     weight_matrix, all_nodes, f_values = build_weight_matrix(
-        unique_saddles, unique_minima, extra_edges, results, saddle_y_values, minima_y_values
+        all_nodes, extra_edges, results, saddle_y_values, minima_y_values
     )
+    # weight_matrix, all_nodes, f_values = build_weight_matrix(
+    #     unique_saddles, unique_minima, extra_edges, saddle_y_values, minima_y_values
+    # )
+
+    # print(weight_matrix.shape)
 
     mst_edges = compute_mst(weight_matrix)
+    # mst_edges = nonzero_indices(weight_matrix)
+    # print('mst_edges', mst_edges.shape)
+
+     # --- Step 4: prune MST
+    root = max(unique_saddles, key=lambda s: saddle_y_values[s]) # highest saddle
+    root_id = index_map[all_nodes.index(root)]
+    # print('root', root_id, root)
+    pruned_values, pruned_edges, pruned_types = prune_graph(all_values, mst_edges, all_types, root_id)
+    # pruned_edges = mst_edges
+
+    # print('pruned_edges', pruned_edges.shape)
 
     # Step 5: DFS-based tidy layout
-    tree_adj = defaultdict(list)
-    for i, j in mst_edges:
-        n1, n2 = all_nodes[i], all_nodes[j]
-        tree_adj[n1].append(n2)
-        tree_adj[n2].append(n1)
+    dfs_order_list = dfs_order(pruned_edges, len(all_nodes), root_id, all_values)
+    # dfs_order_list = reversed(list(range(len(all_nodes))))
+    # print('dfs_order_list', dfs_order_list)
 
-    root = max(unique_saddles, key=lambda s: f_values[s])
-    x_pos = {}
-    visited = set()
-
-    # dfs_layout(tree_adj, root, unique_minima, f_values, visited, x_pos, [1])
-    
-    x_pos = spread_x_positions(x_pos)
-  
-    all_nodes, index_map = map_coords_to_indices(unique_saddles, unique_minima, dataframe)
-
-    dfs_order_list = dfs_order(mst_edges, len(all_nodes), root, dataframe)
-  
     save_tree_nodes_csv(all_nodes, index_map, saddle_y_values, minima_y_values, dfs_order_list)
-    save_tree_edges_csv(mst_edges)
+    save_tree_edges_csv(pruned_edges)

@@ -162,7 +162,7 @@ def plot_results_with_paths_3d(func, critical_points_csv,
     # # for h in slice_indices:
     # #     cs = ax.contourf(yy[h], zz[h], f_vals[h], zdir='x', offset=x[h], alpha=0.5, cmap='viridis')
 
-def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None):
+def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, **kwargs):
 
     # Read node and edge data
     nodes_df = pd.read_csv(nodes_csv)
@@ -177,33 +177,43 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None):
     x_pos = dict(zip(nodes_df["index"], nodes_df["order"]))
     y_val = dict(zip(nodes_df["index"], nodes_df["f_value"]))
     yrange = nodes_df["f_value"].max()-nodes_df["f_value"].min()
-    xrange = nodes_df["index"].max()
+    xrange = nodes_df["order"].max()
 
     saddle_label_added = False
     minima_label_added = False
+    
+    # print(x_pos)
+    # print(nodes_df)
+    # print(edges_df)
+    markersize=50
+    fontsize=8
+    if 'markersize' in kwargs.keys(): markersize=kwargs['markersize']
+    if 'fontsize' in kwargs.keys(): fontsize=kwargs['fontsize']
 
-    # Plot edges
+    # Plot edges:
     for _, row in edges_df.iterrows():
         i, j = row["index_1"], row["index_2"]
         x1, y1 = x_pos[i] * 2, y_val[i]
         x2, y2 = x_pos[j] * 2, y_val[j]
         ax.plot([x1, x2], [y1, y2], color=edge_color, lw=1)
 
-
-    for idx, row in dataframe.iterrows():
+    for idx in nodes_df["index"].to_list():
         x = x_pos[idx] * 2
         y = y_val[idx]
 
         point_type = dataframe.loc[idx, "type"].lower()
         if point_type == "saddle":
-            ax.scatter(x, y, color=saddle_color, edgecolor=edge_color, s=50, zorder=3,
+            ax.scatter(x, y, color=saddle_color, edgecolor=edge_color, s=markersize, zorder=3,
                        label="Saddle" if not saddle_label_added else "")
-            ax.text(x+0.05*xrange, y, f"S{idx}", ha="left", va="center",  fontsize=8, color=text_color)
+            inv = ax.transData.inverted()
+            pad = -0.15*inv.transform((np.sqrt(markersize/np.pi),np.sqrt(markersize/np.pi)))
+            padx, pady = pad[0], pad[1]
+            ax.text(x+padx, y+pady, f"S{idx}", ha="center", va="center",  fontsize=fontsize, color=text_color)
             saddle_label_added = True
         elif point_type == "minimum":
-            ax.scatter(x, y, color=minima_color, edgecolor=edge_color, s=50, zorder=3,
+            ax.scatter(x, y, color=minima_color, edgecolor=edge_color, s=markersize, zorder=3,
                        label="Minima" if not minima_label_added else "")
-            ax.text(x, y - 0.05*yrange, f"M{idx}", ha="center", fontsize=8, color=text_color)
+            ax.text(x, y-pady, f"M{idx}", ha="center", va="center", fontsize=fontsize, color=text_color)
             minima_label_added = True
 
     ax.grid(True, linestyle="--", alpha=0.4, axis='y')
