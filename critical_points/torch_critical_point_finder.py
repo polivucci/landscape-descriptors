@@ -1,13 +1,11 @@
 import torch
-import torch.nn as nn
 from torch.quasirandom import SobolEngine
 from scipy.spatial import KDTree
-import numpy as np
 import pandas as pd
 
 
 class TorchMinimaFinder:
-    def __init__(self, bounds, dimension=2, min_distance=0.01, m=64, device="cpu"):
+    def __init__(self, bounds, dimension=2, min_distance=0.01, m=64, device="cpu", seed=42):
         self.bounds = torch.tensor(bounds, dtype=torch.float32, device=device)
         self.dimension = dimension
         self.min_distance = min_distance
@@ -16,10 +14,11 @@ class TorchMinimaFinder:
         self.attempt_history = []
         self.kdtree = None
         self.device = device
+        self.seed = seed
         self.generate_starting_points()
 
     def generate_starting_points(self):
-        sampler = SobolEngine(dimension=self.dimension, scramble=True, seed=42)
+        sampler = SobolEngine(dimension=self.dimension, scramble=True, seed=self.seed)
         self.x0s = sampler.draw(self.m).to(self.device)
 
     def update_kdtree(self):
@@ -43,33 +42,39 @@ class TorchMinimaFinder:
             return True
         return False
 
+# Torch gradient descent
+from connectivity.connectivity import optimize_lbfgs
+def run_local_search_torch(model, input, loss_fn, lr=1e-3, steps=100):
+    fin_mod, path = optimize_lbfgs(model, input, loss_fn, lr=lr, max_iter=steps)
+    fin_point = path[-1][0]
+    fin_loss = path[-1][-1]
+    return fin_point, fin_loss
 
-# ---- Torch gradient descent (replaces minimize) ----
-def run_local_search_torch(x0, loss_fn, lr=1.0, steps=100):
-    x = x0.clone().detach().requires_grad_(True)
-    optimizer = torch.optim.LBFGS([x], lr=lr, max_iter=steps, line_search_fn='strong_wolfe')
+# # ---- Torch gradient descent (replaces minimize) ----
+# def run_local_search_torch(x0, loss_fn, lr=1e-3, steps=100):
 
-    def closure():
-        optimizer.zero_grad()
-        loss = loss_fn(x)
-        loss.backward()
-        return loss
+#     x = x0.clone().detach().requires_grad_(True)
+#     optimizer = torch.optim.LBFGS([x], lr=lr, max_iter=steps, line_search_fn='strong_wolfe')
 
-    optimizer.step(closure)
-    final_loss = loss_fn(x).item()
-    return x.detach(), final_loss
+#     def closure():
+#         optimizer.zero_grad()
+#         loss = loss_fn(x)
+#         loss.backward()
+#         return loss
 
+#     optimizer.step(closure)
+#     final_loss = loss_fn(x).item()
+#     return x.detach(), final_loss
 
-# ---- Critical point index using Hessian ----
+# Critical point index using Hessian
 def _torch_critical_point_index(hessian, tol=1e-9):
     eigvals = torch.linalg.eigvalsh(hessian)
     if ((eigvals > -tol) & (eigvals < tol)).any():
         return -1  # near-zero eigenvalue
     return int((eigvals < -tol).sum().item())
 
-
 # ---- Main search ----
-def find_critical_points_torch(model_class,loss_func, bounds, dimension=2,
+def find_critical_points_torch(model_class, loss_func, input, bounds, dimension=2,
                                num_attempts=64, min_distance=0.01,
                                device="cpu", lr=0.01, steps=300, ):
     """
@@ -85,24 +90,24 @@ def find_critical_points_torch(model_class,loss_func, bounds, dimension=2,
         # Initialize NN module (e.g., Schwefel2D)
         model = model_class(*x0.tolist()).to(device)
 
-        # Define loss as squared gradient norm of the Schwefel loss
-        def squared_grad_norm(x):
-            x = x.clone().detach().requires_grad_(True)
-            y = model()  # get [x1, x2]
-            loss = loss_func(*y)
-            grad = torch.autograd.grad(loss, y, create_graph=True)[0]
-            return torch.sum(grad ** 2)
+        # # Define loss as squared gradient norm of the Schwefel loss
+        # def squared_grad_norm(x):
+        #     mod = model_class(*x).to(device)
+        #     y = mod(input)  # get [x1, x2]
+        #     loss = loss_func(y)
+        #     grad = torch.autograd.grad(loss, y, create_graph=True)[0]
+        #     return torch.sum(grad ** 2)
 
         # Gradient descent to minimize ||∇f||²
-        final_point, final_val = run_local_search_torch(x0, squared_grad_norm, lr=lr, steps=steps)
+        final_point, final_val = run_local_search_torch(model, input, loss_func, lr=lr, steps=steps)
         finder.add_minimum(final_point, final_val)
 
-    # Evaluate critical points
+    # Classify critical points
     for point, val in finder.minima:
         point_t = torch.tensor(point, dtype=torch.float32, requires_grad=True, device=device)
-        y = model_class(*point_t.tolist())().to(device)
-        f_val = loss_func(*y)
-        hessian = torch.autograd.functional.hessian(lambda z: loss_func(*z), y)
+        y = model_class(*point_t.tolist())(input).to(device)
+        f_val = loss_func(y)
+        hessian = torch.autograd.functional.hessian(lambda z: loss_func(z), y)
         index = _torch_critical_point_index(hessian)
 
         if index == 0:
@@ -116,7 +121,6 @@ def find_critical_points_torch(model_class,loss_func, bounds, dimension=2,
             print("saddle", point)
 
     return minima, maxima, saddles
-
 
 # ---- CSV Writer ----
 def save_critical_points_to_csv(minima, saddles, dimension=2, filename="critical_points_torch.csv"):

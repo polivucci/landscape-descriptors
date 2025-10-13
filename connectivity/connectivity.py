@@ -35,22 +35,22 @@ def offset_near_saddle(saddle_point, func, epsilon=0.01):
     return saddle_point + offset_distance * direction, saddle_point - offset_distance * direction
 
 
-def optimize_lbfgs(model ,loss_fn , max_iter=100, atol=1e-6, rtol=1e-5):
+def optimize_lbfgs(model, input, loss_fn , lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5):
     """
     Optimize using PyTorch LBFGS to find local minimum
     """
-    optimizer = LBFGS(model.parameters(), max_iter=max_iter, line_search_fn="strong_wolfe")
+    optimizer = LBFGS(model.parameters(), lr=lr, max_iter=max_iter, line_search_fn="strong_wolfe")
 
     trajectory = []  # Start with initial point 
-    prev_coords = model.forward().detach().clone()
+    prev_coords = model.forward(input).detach().clone()
 
     def closure(): #Closure required because LBFGS evaluates the function multiple times during each iteration.
             optimizer.zero_grad()
-            coords = model()
+            coords = model(input)
             loss = loss_fn(coords)
             loss.backward()
             fval = float(loss.item())
-            trajectory.append((coords.detach().cpu().numpy(), fval)) #Appends each trajectory point
+            trajectory.append((coords.detach().cpu(), fval)) #Appends each trajectory point
             return loss
     
     for _ in range(max_iter):
@@ -59,16 +59,16 @@ def optimize_lbfgs(model ,loss_fn , max_iter=100, atol=1e-6, rtol=1e-5):
     # stopping criterion
         try:
             torch.testing.assert_close(
-                model.forward().detach(), prev_coords, atol=atol, rtol=rtol
+                model.forward(input).detach(), prev_coords, atol=atol, rtol=rtol
             )
             # if assert_close passes, we break early
             break
         except AssertionError:
             pass
 
-        prev_coords = model.forward().detach().clone()
+        prev_coords = model.forward(input).detach().clone()
     
-    return model.forward().detach(), trajectory  # Return both final point and path
+    return model.forward(input).detach(), trajectory  # Return both final point and path
 
 
 def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
