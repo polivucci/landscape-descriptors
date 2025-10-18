@@ -49,48 +49,55 @@ def plot_results_with_paths(func, critical_points_csv,
     contour = ax.contourf(X, Y, Z, levels=20, cmap=cmap)
     fig.colorbar(contour, label='Function Value')
 
-    if critical_points_csv is not None and saddle_to_minima_csv is not None:
+    if critical_points_csv is not None:
+
         # Load data 
         crit_df = pd.read_csv(critical_points_csv)
-        conn_df = pd.read_csv(saddle_to_minima_csv)
 
-        # Extracting the indices which are connected
-        saddle_indices = conn_df['index_saddle'].unique()
-        minima_indices = conn_df['index_minimum'].unique()
-
-        minima_coords = []
-        saddle_coords = []
+        saddle_indices = crit_df[crit_df['type']=='saddle'].index.to_list()
+        minima_indices = crit_df[crit_df['type']=='minimum'].index.to_list()
 
         # Plot minima with labels
+        minima_coords = []
         for i in minima_indices:
             row = crit_df.iloc[i]
             point = (row['x1'], row['x2'])
             minima_coords.append(point)
             ax.text(point[0] + 0.015, point[1] + 0.015, f"M{i}", fontsize=8, color=text_color)
         
-        minima_coords = np.array(minima_coords)
-        ax.scatter(minima_coords[:, 0], minima_coords[:, 1],
-            c=minima_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Minima')
+        if minima_coords!=[]:
+            minima_coords = np.array(minima_coords)
+            ax.scatter(minima_coords[:, 0], minima_coords[:, 1],
+                c=minima_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Minima')
             
         # Plot saddle points with labels
+        saddle_coords = []
         for i in saddle_indices:
             row = crit_df.iloc[i]
             point = (row['x1'], row['x2'])
             saddle_coords.append(point)
             ax.text(point[0] + 0.015, point[1] + 0.015, f"S{i}", fontsize=8, color=text_color)
 
-        saddle_coords = np.array(saddle_coords)
-        ax.scatter(saddle_coords[:, 0], saddle_coords[:, 1],
-                c=saddle_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Saddles')
+        if saddle_coords!=[]:
+            saddle_coords = np.array(saddle_coords)
+            ax.scatter(saddle_coords[:, 0], saddle_coords[:, 1],
+                    c=saddle_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Saddles')
 
-        # Plot descent paths
-        for _, row in conn_df.iterrows():
-            s_row = crit_df.iloc[int(row['index_saddle'])]
-            m_row = crit_df.iloc[int(row['index_minimum'])]
-            saddle = (s_row['x1'], s_row['x2'])
-            minimum = (m_row['x1'], m_row['x2'])
-            ax.annotate('', xy=minimum, xytext=saddle,
-                        arrowprops=dict(arrowstyle='->', color=edge_color))
+        if saddle_to_minima_csv is not None:
+            conn_df = pd.read_csv(saddle_to_minima_csv)
+
+            # Extracting the indices which are connected
+            saddle_indices = conn_df['index_saddle'].unique()
+            minima_indices = conn_df['index_minimum'].unique()
+
+            # Plot descent paths
+            for _, row in conn_df.iterrows():
+                s_row = crit_df.iloc[int(row['index_saddle'])]
+                m_row = crit_df.iloc[int(row['index_minimum'])]
+                saddle = (s_row['x1'], s_row['x2'])
+                minimum = (m_row['x1'], m_row['x2'])
+                ax.annotate('', xy=minimum, xytext=saddle,
+                            arrowprops=dict(arrowstyle='->', color=edge_color))
 
     fig.tight_layout()
     return fig

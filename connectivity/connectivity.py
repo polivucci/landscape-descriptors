@@ -71,25 +71,50 @@ def optimize_lbfgs(model, input, loss_fn , lr=1e-3, max_iter=100, atol=1e-6, rto
     return model.forward(input).detach(), trajectory  # Return both final point and path
 
 
+
 def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
     """
     Find closest known minimum and check if within threshold
     """
+    # x_cols = sorted([col for col in minima_df.columns if col.startswith("x")])
+    # dists = minima_df.apply(
+    #     lambda r: np.linalg.norm(min_point.numpy() - r[x_cols].values.astype(np.float32)),
+    #     axis=1
+    # )
+    # closest_idx = dists.idxmin()
+    # return minima_df.loc[closest_idx][x_cols].tolist(), dists.min() < threshold, closest_idx
     x_cols = sorted([col for col in minima_df.columns if col.startswith("x")])
-    dists = minima_df.apply(
-        lambda r: np.linalg.norm(min_point.numpy() - r[x_cols].values.astype(np.float32)),
-        axis=1
-    )
-    closest_idx = dists.idxmin()
-    return minima_df.loc[closest_idx][x_cols].tolist(), dists.min() < threshold, closest_idx
+
+    # Convert DataFrame slice to torch tensor (on same device as min_point)
+    minima_tensor = torch.tensor(minima_df[x_cols].values, dtype=torch.set_default_dtype(torch.float64), device=min_point.device)
+
+    # Ensure min_point is a float64 tensor on the same device
+    if not isinstance(min_point, torch.Tensor):
+        min_point = torch.tensor(min_point, dtype=torch.set_default_dtype(torch.float64), device=minima_tensor.device)
+    else:
+        min_point = min_point.to(dtype=torch.set_default_dtype(torch.float64), device=minima_tensor.device)
+
+    # Compute Euclidean distances in torch
+    # Shape: (N, D) - (1, D) -> (N, D) -> norm along dim=1
+    dists = torch.norm(minima_tensor - min_point.unsqueeze(0), dim=1)
+
+    # Find closest index and corresponding distance
+    closest_idx = torch.argmin(dists).item()
+    min_dist = dists[closest_idx].item()
+
+    # Extract coordinates of the closest minimum
+    closest_min_point = [round(float(x), 10) for x in minima_tensor[closest_idx].cpu().tolist()] 
+
+    # Return (closest_point_coords, within_threshold, index)
+    return closest_min_point, (min_dist < threshold), closest_idx
 
 
-def trajectory_length(traj):
-    """
-    Get Total length of the trajectory for the actual Descent path
-    """
-    return sum(np.linalg.norm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
-
+# def trajectory_length(traj):
+#     """
+#     Get Total length of the trajectory for the actual Descent path
+#     """
+#     return sum(np.linalg.norm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
+    
 def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model):
     """
     Given a saddle point, trace descent on both sides and match to known minima
@@ -103,20 +128,20 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model):
     # Build models for each offset (for multiple dimension)
     coords1 = [float(v) for v in offset_p1.tolist()]
     coords2 = [float(v) for v in offset_p2.tolist()]
-
+    input = torch.tensor([0.0])  # Dummy input, not used in model forward
     model1 = nn_model(*coords1)
-    minima1, traj1 = optimize_lbfgs(model1, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
+    minima1, traj1 = optimize_lbfgs(model1,input, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
     arrival1_val = loss_fn(minima1).item() # Minimizer Function value of minima1
 
     model2 = nn_model(*coords2)
-    minima2, traj2 = optimize_lbfgs(model2, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 2
+    minima2, traj2 = optimize_lbfgs(model2,input, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 2
     arrival2_val = loss_fn(minima2).item() # Minimizer Function value of minima2
 
     min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df)   #Comparing Minima1 from Optimizer with known Minima from CSV
     min2_coords, connected2, idx_minima2 = compare_to_known_minima(minima2, minima_df)   #Comparing Minima2 from Optimizer with known Minima from CSV
-
-    length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
-    length2 = trajectory_length(traj2[0]) #calculating total length of the trajectory for offset 1
+    print(min1_coords, connected1, idx_minima1)
+    # length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
+    # length2 = trajectory_length(traj2[0]) #calculating total length of the trajectory for offset 1
 
     #Making table for results found
     result = [ 
@@ -126,7 +151,7 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model):
             "descent":tuple(float(x) for x in minima1), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
             "minimizer": tuple(float(x) for x in min1_coords),
             "min_value": arrival1_val,
-            "trajectory_length": length1,
+            # "trajectory_length": length1,
             "is_connected": "yes" if connected1 else "no"
         },
         {
@@ -135,7 +160,7 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model):
             "descent":tuple(float(x) for x in minima2), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
             "minimizer": tuple(float(x) for x in min2_coords),
             "min_value": arrival2_val,
-            "trajectory_length": length2,
+            # "trajectory_length": length2,
             "is_connected": "yes" if connected2 else "no",
         }
     ]

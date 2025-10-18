@@ -60,7 +60,7 @@ class Schwefel4D(nn.Module):
         # For ML consistency: return parameters as a vector
         return torch.stack([self.x1, self.x2, self.x3, self.x4])
 
-def schwefel_loss(coords):
+def schwefel_loss(*coords):
     """
     Wraps schwefel() into a torch-friendly loss function for 3D.
     """
@@ -70,6 +70,22 @@ def schwefel2D_numpy(*x):
     # combined nnmodule+schwefel loss machinery
     x = [torch.tensor(xi) for xi in x]
     model = Schwefel2D(*x)
-    coords = model()                        # get parameters [x1, x2]
+    coords = model(x)                        # get parameters [x1, x2]
     loss = _schwefel(*coords)                 # evaluate Schwefel loss
     return float(loss.item())               # return scalar for NumPy
+
+def schwefel3D_numpy(*x):
+    # combined nnmodule+schwefel loss machinery
+    x = [torch.tensor(xi) for xi in x]
+    model = Schwefel3D(*x)
+    coords = model(x)                        # get parameters [x1, x2]
+    loss = _schwefel(*coords)                 # evaluate Schwefel loss
+    return float(loss.item())      
+
+def schwefel4D_numpy(*x):
+    # combined nnmodule+schwefel loss machinery
+    x = [torch.tensor(xi) for xi in x]
+    model = Schwefel4D(*x)
+    coords = model(x)                        # get parameters [x1, x2]
+    loss = _schwefel(*coords)                 # evaluate Schwefel loss
+    return float(loss.item())      

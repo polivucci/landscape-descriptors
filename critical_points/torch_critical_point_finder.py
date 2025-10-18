@@ -6,7 +6,7 @@ import pandas as pd
 
 class TorchMinimaFinder:
     def __init__(self, bounds, dimension=2, min_distance=0.01, m=64, device="cpu", seed=42):
-        self.bounds = torch.tensor(bounds, dtype=torch.float32, device=device)
+        self.bounds = torch.tensor(bounds, dtype=torch.set_default_dtype(torch.float64), device=device)
         self.dimension = dimension
         self.min_distance = min_distance
         self.m = m
@@ -32,10 +32,21 @@ class TorchMinimaFinder:
             self.update_kdtree()
         distances, _ = self.kdtree.query([point], k=1)
         return distances[0] < self.min_distance
+    def _is_out_bounds(self, point, tolerance=1e-6):
+        """
+        Check if point is outside the defined bounds (with optional tolerance).
+        `point` should be a 1D torch tensor or numpy array.
+        """
+        lower, upper = self.bounds
+        return torch.any(point < lower - tolerance) or torch.any(point > upper + tolerance)
 
     def add_minimum(self, point, value):
         point_np = point.detach().cpu().numpy()
-        print(point_np, "Reject:", self._is_too_close(point_np))
+        print(point_np, "Reject:", self._is_too_close(point_np) or bool(self._is_out_bounds(point)))
+
+        if self._is_out_bounds(point):
+            print(f"Rejected: Out of bounds -> {point.tolist()}")
+            return False
         if not self._is_too_close(point_np):
             self.minima.append((point_np, value))
             self.update_kdtree()
@@ -104,7 +115,7 @@ def find_critical_points_torch(model_class, loss_func, input, bounds, dimension=
 
     # Classify critical points
     for point, val in finder.minima:
-        point_t = torch.tensor(point, dtype=torch.float32, requires_grad=True, device=device)
+        point_t = torch.tensor(point, dtype=torch.set_default_dtype(torch.float64), requires_grad=True, device=device)
         y = model_class(*point_t.tolist())(input).to(device)
         f_val = loss_func(y)
         hessian = torch.autograd.functional.hessian(lambda z: loss_func(z), y)
