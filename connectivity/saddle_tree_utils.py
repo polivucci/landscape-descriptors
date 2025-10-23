@@ -254,14 +254,14 @@ def spread_x_positions(x_pos, min_sep=0.3):
             used_x[rounded] = 1
     return x_pos
 
-def dfs_order(mst_edges, node_count, root_id, all_values):
+def dfs_order(mst_edges, node_count, root_id, all_values, ids):
     tree = defaultdict(set)
     for u, v in mst_edges:
         tree[u].add(v)
         tree[v].add(u)
 
     for u in tree.keys():
-        tree[u] = sorted(tree[u], key=lambda n: all_values[n])
+        tree[u] = sorted(tree[u], key=lambda n: all_values[ids[n]])
 
     visited = [False] * node_count
     order = []
@@ -273,12 +273,13 @@ def dfs_order(mst_edges, node_count, root_id, all_values):
             if not visited[neighbor]:
                 dfs(neighbor)
 
-    node = root_id
+    root_pos = ids.index(root_id)
+    node = root_pos
     dfs(node)       # start from first node
 
     return order    # list of node indices in DFS order
 
-def map_coords_to_indices(unique_saddles, unique_minima, critical_points_df):
+def map_coords_to_indices(critical_points_df):
     x_cols = sorted([col for col in critical_points_df.columns if col.startswith("x")])
 
     coord_to_index = {
@@ -293,7 +294,11 @@ def map_coords_to_indices(unique_saddles, unique_minima, critical_points_df):
     tuple(row[col] for col in x_cols): row["type"]
     for idx, row in critical_points_df.iterrows()
     }
-    all_nodes = unique_minima + unique_saddles
+
+    all_nodes = [
+    tuple(row[col] for col in x_cols) for idx, row in critical_points_df.iterrows()
+    ]
+
     index_map = []
     all_values = []
     all_types = []
@@ -323,15 +328,15 @@ def save_tree_nodes_csv(
     print(f"Saved node order to {output_file}")
 
 
-def save_tree_edges_csv(mst_edges, output_file="results/tree_connectivity.csv"):
-    rows = [(i, j) for i, j in mst_edges]
+def save_tree_edges_csv(mst_edges, ids, output_file="results/tree_connectivity.csv"):
+    rows = [(ids[i], ids[j]) for i, j in mst_edges]
     df = pd.DataFrame(rows, columns=["index_1", "index_2"])
     df.to_csv(output_file, index=False)
     print(f"Saved tree edges to {output_file}")
 
 
 import collections
-def prune_graph(values, edges, types, root_id):
+def prune_graph(values, ids, edges, types, root_id):
     
     n = len(values)
     type1 = "minimum"
@@ -345,7 +350,8 @@ def prune_graph(values, edges, types, root_id):
         return adj
     
     # Check the type2 node with max value
-    assert values[root_id] == max(values)
+    root_pos = ids.index(root_id)
+    assert values[root_pos] == max(values)
     max_type2 = root_id
     
     keep = set(range(n))  # start with all nodes
@@ -363,7 +369,7 @@ def prune_graph(values, edges, types, root_id):
             if node_type == type1:
                 continue  # always keep
             
-            if i == max_type2:
+            if ids[i] == max_type2:
                 continue  # always keep
             
             # Rule 1

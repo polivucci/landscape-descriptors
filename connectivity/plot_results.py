@@ -25,7 +25,7 @@ cmap = cm.RdPu
 
 def plot_results_with_paths(func, critical_points_csv, 
                             saddle_to_minima_csv, bounds=(0, 1),
-                            res=100, fig=None):
+                            res=100, txtpad=0.015, fig=None):
     """
     Visualize function landscape with minima, saddle points, and descent paths
     with consistent labels S0/S1.. for saddle points and M0/M1.. for minima.
@@ -38,8 +38,8 @@ def plot_results_with_paths(func, critical_points_csv,
     ax = fig.gca()
 
     # Set up grid and evaluate function
-    x = np.linspace(bounds[0], bounds[1], res)
-    y = np.linspace(bounds[0], bounds[1], res)
+    x = np.linspace(bounds[0][0], bounds[0][1], res)
+    y = np.linspace(bounds[1][0], bounds[1][1], res)
     X, Y = np.meshgrid(x, y, indexing='ij')
     Z = np.array([[func(x, y) for x, y in zip(row_x, row_y)]
                   for row_x, row_y in zip(X, Y)])
@@ -49,48 +49,55 @@ def plot_results_with_paths(func, critical_points_csv,
     contour = ax.contourf(X, Y, Z, levels=20, cmap=cmap)
     fig.colorbar(contour, label='Function Value')
 
-    if critical_points_csv is not None and saddle_to_minima_csv is not None:
+    if critical_points_csv is not None:
+
         # Load data 
         crit_df = pd.read_csv(critical_points_csv)
-        conn_df = pd.read_csv(saddle_to_minima_csv)
 
-        # Extracting the indices which are connected
-        saddle_indices = conn_df['index_saddle'].unique()
-        minima_indices = conn_df['index_minimum'].unique()
-
-        minima_coords = []
-        saddle_coords = []
+        saddle_indices = crit_df[crit_df['type']=='saddle'].index.to_list()
+        minima_indices = crit_df[crit_df['type']=='minimum'].index.to_list()
 
         # Plot minima with labels
+        minima_coords = []
         for i in minima_indices:
             row = crit_df.iloc[i]
             point = (row['x1'], row['x2'])
             minima_coords.append(point)
-            ax.text(point[0] + 0.015, point[1] + 0.015, f"M{i}", fontsize=8, color=text_color)
+            ax.text(point[0] + txtpad, point[1] + txtpad, f"M{i}", fontsize=8, color=text_color, zorder=10)
         
-        minima_coords = np.array(minima_coords)
-        ax.scatter(minima_coords[:, 0], minima_coords[:, 1],
-            c=minima_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Minima')
+        if minima_coords!=[]:
+            minima_coords = np.array(minima_coords)
+            ax.scatter(minima_coords[:, 0], minima_coords[:, 1],
+                c=minima_color, s=50, edgecolor=edge_color, linewidth=1.5, label='Minima')
             
         # Plot saddle points with labels
+        saddle_coords = []
         for i in saddle_indices:
             row = crit_df.iloc[i]
             point = (row['x1'], row['x2'])
             saddle_coords.append(point)
-            ax.text(point[0] + 0.015, point[1] + 0.015, f"S{i}", fontsize=8, color=text_color)
+            ax.text(point[0] + txtpad, point[1] + txtpad, f"S{i}", fontsize=8, color=text_color, zorder=10)
 
-        saddle_coords = np.array(saddle_coords)
-        ax.scatter(saddle_coords[:, 0], saddle_coords[:, 1],
-                c=saddle_color, s=50, edgecolor=edge_color, linewidth=1.5, zorder=10, label='Saddles')
+        if saddle_coords!=[]:
+            saddle_coords = np.array(saddle_coords)
+            ax.scatter(saddle_coords[:, 0], saddle_coords[:, 1],
+                    c=saddle_color, s=50, edgecolor=edge_color, linewidth=1.5, label='Saddles')
 
-        # Plot descent paths
-        for _, row in conn_df.iterrows():
-            s_row = crit_df.iloc[int(row['index_saddle'])]
-            m_row = crit_df.iloc[int(row['index_minimum'])]
-            saddle = (s_row['x1'], s_row['x2'])
-            minimum = (m_row['x1'], m_row['x2'])
-            ax.annotate('', xy=minimum, xytext=saddle,
-                        arrowprops=dict(arrowstyle='->', color=edge_color))
+        if saddle_to_minima_csv is not None:
+            conn_df = pd.read_csv(saddle_to_minima_csv)
+
+            # Extracting the indices which are connected
+            saddle_indices = conn_df['index_saddle'].unique()
+            minima_indices = conn_df['index_minimum'].unique()
+
+            # Plot descent paths
+            for _, row in conn_df.iterrows():
+                s_row = crit_df.iloc[int(row['index_saddle'])]
+                m_row = crit_df.iloc[int(row['index_minimum'])]
+                saddle = (s_row['x1'], s_row['x2'])
+                minimum = (m_row['x1'], m_row['x2'])
+                ax.annotate('', xy=minimum, xytext=saddle,
+                            arrowprops=dict(arrowstyle='->', color=edge_color))
 
     fig.tight_layout()
     return fig
@@ -162,7 +169,7 @@ def plot_results_with_paths_3d(func, critical_points_csv,
     # # for h in slice_indices:
     # #     cs = ax.contourf(yy[h], zz[h], f_vals[h], zdir='x', offset=x[h], alpha=0.5, cmap='viridis')
 
-def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, **kwargs):
+def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, txt_pads=(0.1, 0.1), **kwargs):
 
     # Read node and edge data
     nodes_df = pd.read_csv(nodes_csv)
@@ -182,9 +189,9 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, **
     saddle_label_added = False
     minima_label_added = False
     
-    # print(x_pos)
-    # print(nodes_df)
-    # print(edges_df)
+    # print('x_pos', x_pos)
+    # print('nodes_df', nodes_df)
+    # print('edges_df', edges_df)
     markersize=50
     fontsize=8
     if 'markersize' in kwargs.keys(): markersize=kwargs['markersize']
@@ -206,8 +213,8 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, **
             ax.scatter(x, y, color=saddle_color, edgecolor=edge_color, s=markersize, zorder=3,
                        label="Saddle" if not saddle_label_added else "")
             inv = ax.transData.inverted()
-            pad = -0.15*inv.transform((np.sqrt(markersize/np.pi),np.sqrt(markersize/np.pi)))
-            padx, pady = pad[0], pad[1]
+            # pad = -0.15*inv.transform((np.sqrt(markersize/np.pi),np.sqrt(markersize/np.pi)))
+            padx, pady = txt_pads[0], txt_pads[1]
             ax.text(x+padx, y+pady, f"S{idx}", ha="center", va="center",  fontsize=fontsize, color=text_color)
             saddle_label_added = True
         elif point_type == "minimum":

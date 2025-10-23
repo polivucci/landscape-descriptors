@@ -21,7 +21,8 @@ def saddle_tree_calculations(results, minima, dataframe):
     unique_saddles, unique_minima = get_unique_nodes(results, minima)
     saddle_y_values, minima_y_values = get_function_values(results, minima)
     
-    all_nodes, all_values, all_types, index_map = map_coords_to_indices(unique_saddles, unique_minima, dataframe)
+    all_nodes, all_values, all_types, index_map = map_coords_to_indices(dataframe)
+    print('index_map', index_map)
 
     # Build mapping from minima to saddles
     minima_to_saddles, saddle_to_minima = build_saddle_minima_mapping(
@@ -32,7 +33,7 @@ def saddle_tree_calculations(results, minima, dataframe):
     # STEP 2: For each saddle, connect its neighbors that have >= function value
     extra_edges = build_extra_edges(minima_to_saddles, unique_saddles, saddle_y_values)
     # extra_edges, all_nodes = build_extra_edges(minima_to_saddles, saddle_to_minima, saddle_y_values)
-    
+    # print('all_nodes', all_nodes)
      # --- Step 3: Build connectivity matrix and compute MST ---
     weight_matrix, all_nodes, f_values = build_weight_matrix(
         all_nodes, extra_edges, results, saddle_y_values, minima_y_values
@@ -40,6 +41,7 @@ def saddle_tree_calculations(results, minima, dataframe):
     # weight_matrix, all_nodes, f_values = build_weight_matrix(
     #     unique_saddles, unique_minima, extra_edges, saddle_y_values, minima_y_values
     # )
+    # print('all_nodes', all_nodes)
 
     # print(weight_matrix.shape)
 
@@ -50,16 +52,19 @@ def saddle_tree_calculations(results, minima, dataframe):
      # --- Step 4: prune MST
     root = max(unique_saddles, key=lambda s: saddle_y_values[s]) # highest saddle
     root_id = index_map[all_nodes.index(root)]
-    # print('root', root_id, root)
-    pruned_values, pruned_edges, pruned_types = prune_graph(all_values, mst_edges, all_types, root_id)
-    # pruned_edges = mst_edges
+    # print('root_id', root_id)
 
-    # print('pruned_edges', pruned_edges.shape)
+    # print('root', root_id, root)
+    # print('index_map', index_map)
+    pruned_values, pruned_edges, pruned_types = prune_graph(all_values, index_map, mst_edges, all_types, root_id)
+    # pruned_edges = mst_edges
+    # print('pruned_edges', pruned_edges)
 
     # Step 5: DFS-based tidy layout
-    dfs_order_list = dfs_order(pruned_edges, len(all_nodes), root_id, all_values)
+    # print('all_values', all_values)
+    dfs_order_list = dfs_order(pruned_edges, len(all_nodes), root_id, all_values, index_map)
     # dfs_order_list = reversed(list(range(len(all_nodes))))
     # print('dfs_order_list', dfs_order_list)
 
     save_tree_nodes_csv(all_nodes, index_map, saddle_y_values, minima_y_values, dfs_order_list)
-    save_tree_edges_csv(pruned_edges)
+    save_tree_edges_csv(pruned_edges, index_map)

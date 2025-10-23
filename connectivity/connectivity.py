@@ -1,26 +1,49 @@
 import torch
 import pandas as pd
 import numpy as np
-from torch.optim import LBFGS
 import os
+from critical_points.optimizers import optimize_lbfgs
 
 torch.set_default_dtype(torch.float64)
 
-def offset_near_saddle(saddle_point, func, epsilon=0.01):
+from critical_points.torch_critical_point_finder import flatten_hessian_blocks
+def compute_model_hessian(model, input, loss_func):
+
+    active_params = [True if p.requires_grad else False for p in model.parameters()]
+    params_flatten, unflatten = torch.utils._pytree.tree_flatten(dict(model.named_parameters()))
+
+    def eval_loss_fn_params(flat_params):
+        """Defines the functional eval of the model given the parameters.
+        Flatten is required for torch.func.hessian to return a 2-tensor and not a nested dict,
+        as function like torch.func.hessian from torch.func expect a single input tensor or PyTree (nested dict) of tensors.
+        and functional calls work with nested dicts (i.e. unflattened).
+        """
+        params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) # see ChatGPT convo
+        y = torch.func.functional_call(model, params_dict, (input,))
+        return loss_func(y)
+
+    hessian = torch.func.hessian(eval_loss_fn_params)(params_flatten)
+    hessian = flatten_hessian_blocks(hessian)
+    hessian = hessian[active_params][:, active_params]
+    
+    return hessian
+
+def offset_near_saddle(saddle_point, model_saddle, input, loss_func, epsilon=0.01):
     """
     Offset the saddle point along its most unstable direction,
     scaled by radius of curvature (1 / |eigenvalue|).
     """
-    point = saddle_point.clone().detach().requires_grad_(True)
+
+    point = saddle_point.clone().detach().unsqueeze(1)
 
     # Compute Hessian
-    hessian = torch.autograd.functional.hessian(func, point)
+    hessian = compute_model_hessian(model_saddle, input, loss_func).detach()
 
     # Eigendecomposition
     eigvals, eigvecs = torch.linalg.eigh(hessian)
     
-    # Get most negative eigenvalue and its eigenvector (unstable direction)
-    unstable_idx = torch.argmin(eigvals)
+    # Get negative eigenvalues and their eigenvectors (unstable directions)
+    unstable_idx = (eigvals<0)
     unstable_eigval = eigvals[unstable_idx]
     unstable_direction = eigvecs[:, unstable_idx]
 
@@ -28,56 +51,49 @@ def offset_near_saddle(saddle_point, func, epsilon=0.01):
     radius_of_curvature = 1.0 / torch.abs(unstable_eigval)
 
     # Offset distance = ε * radius_of_curvature
-    offset_distance = epsilon * radius_of_curvature
+    offset_distance = (epsilon * radius_of_curvature).unsqueeze(0)
 
-    # Offset along unstable direction
-    direction = unstable_direction / torch.norm(unstable_direction)
-    return saddle_point + offset_distance * direction, saddle_point - offset_distance * direction
-
-
-def optimize_lbfgs(model, input, loss_fn , lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5):
-    """
-    Optimize using PyTorch LBFGS to find local minimum
-    """
-    optimizer = LBFGS(model.parameters(), lr=lr, max_iter=max_iter, line_search_fn="strong_wolfe")
-
-    trajectory = []  # Start with initial point 
-    prev_coords = model.forward(input).detach().clone()
-
-    def closure(): #Closure required because LBFGS evaluates the function multiple times during each iteration.
-            optimizer.zero_grad()
-            coords = model(input)
-            loss = loss_fn(coords)
-            loss.backward()
-            fval = float(loss.item())
-            trajectory.append((coords.detach().cpu(), fval)) #Appends each trajectory point
-            return loss
+    # Offset along unstable directions
+    direction = unstable_direction / torch.norm(unstable_direction, dim=0, keepdim=True)
+    offset_points = torch.cat((point + offset_distance * direction, point - offset_distance * direction), dim=1).T
     
-    for _ in range(max_iter):
-        optimizer.step(closure)
-        
-    # stopping criterion
-        try:
-            torch.testing.assert_close(
-                model.forward(input).detach(), prev_coords, atol=atol, rtol=rtol
-            )
-            # if assert_close passes, we break early
-            break
-        except AssertionError:
-            pass
+    return offset_points
 
-        prev_coords = model.forward(input).detach().clone()
+# def offset_near_saddle(saddle_point, func, epsilon=0.01):
+#     """
+#     Offset the saddle point along its most unstable direction,
+#     scaled by radius of curvature (1 / |eigenvalue|).
+#     """
+#     point = saddle_point.clone().detach().requires_grad_(True)
+
+#     # Compute Hessian
+#     hessian = torch.autograd.functional.hessian(func, point)
+
+#     # Eigendecomposition
+#     eigvals, eigvecs = torch.linalg.eigh(hessian)
     
-    return model.forward(input).detach(), trajectory  # Return both final point and path
+#     # Get most negative eigenvalue and its eigenvector (unstable direction)
+#     unstable_idx = torch.argmin(eigvals)
+#     unstable_eigval = eigvals[unstable_idx]
+#     unstable_direction = eigvecs[:, unstable_idx]
+
+#     # Radius of curvature = 1 / |λ|
+#     radius_of_curvature = 1.0 / torch.abs(unstable_eigval)
+
+#     # Offset distance = ε * radius_of_curvature
+#     offset_distance = epsilon * radius_of_curvature
+
+#     # Offset along unstable direction
+#     direction = unstable_direction / torch.norm(unstable_direction)
+#     return saddle_point + offset_distance * direction, saddle_point - offset_distance * direction
 
 
 def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
-    """
-    Find closest known minimum and check if within threshold
+    """ Find closest known minimum and check if within threshold
     """
     x_cols = sorted([col for col in minima_df.columns if col.startswith("x")])
     dists = minima_df.apply(
-        lambda r: np.linalg.norm(min_point.numpy() - r[x_cols].values.astype(np.float32)),
+        lambda r: np.linalg.norm(min_point.numpy() - r[x_cols].values.astype(np.float64)),
         axis=1
     )
     closest_idx = dists.idxmin()
@@ -90,67 +106,49 @@ def trajectory_length(traj):
     """
     return sum(np.linalg.norm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
 
-def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model):
+def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, input, log_paths=False):
     """
     Given a saddle point, trace descent on both sides and match to known minima
     """
-    saddle_point = torch.tensor(saddle_point, dtype=torch.float64)
+    
+    saddle_point = torch.tensor(saddle_point)
+    model_saddle = nn_model(saddle_point)
+    active_params = [True if p.requires_grad else False for p in model_saddle.parameters()]
 
-    offset_p1, offset_p2 = offset_near_saddle(saddle_point, loss_fn) #gets both offset point with curvature radius 
+    # offset_p1, offset_p2 = offset_near_saddle(saddle_point, loss_fn) #gets both offset point with curvature radius 
+    # offset_p1, offset_p2 = offset_near_saddle(saddle_point, model_saddle, input, loss_fn, epsilon=0.01) 
+    offsets = offset_near_saddle(saddle_point, model_saddle, input, loss_fn, epsilon=0.01) 
 
-    saddle_value = loss_fn(saddle_point).item() #Get exact saddle value for plotting on tree
+    saddle_value = loss_fn(model_saddle(input)).item() #Get exact saddle value for plotting on tree
 
-    # Build models for each offset (for multiple dimension)
-    coords1 = [float(v) for v in offset_p1.tolist()]
-    coords2 = [float(v) for v in offset_p2.tolist()]
-
-    model1 = nn_model(*coords1)
-    minima1, traj1 = optimize_lbfgs(model1, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
-    arrival1_val = loss_fn(minima1).item() # Minimizer Function value of minima1
-
-    model2 = nn_model(*coords2)
-    minima2, traj2 = optimize_lbfgs(model2, loss_fn)   #Optimzation to find Minima of a Saddle point and Trajectory for offset 2
-    arrival2_val = loss_fn(minima2).item() # Minimizer Function value of minima2
-
-    min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df)   #Comparing Minima1 from Optimizer with known Minima from CSV
-    min2_coords, connected2, idx_minima2 = compare_to_known_minima(minima2, minima_df)   #Comparing Minima2 from Optimizer with known Minima from CSV
-
-    length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
-    length2 = trajectory_length(traj2[0]) #calculating total length of the trajectory for offset 1
-
-    #Making table for results found
-    result = [ 
-        {
-            "saddle_point": tuple(saddle_point.tolist()),
-            "saddle_value": saddle_value,
-            "descent":tuple(float(x) for x in minima1), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
-            "minimizer": tuple(float(x) for x in min1_coords),
-            "min_value": arrival1_val,
-            "trajectory_length": length1,
-            "is_connected": "yes" if connected1 else "no"
-        },
-        {
-            "saddle_point": tuple(saddle_point.tolist()),
-            "saddle_value": saddle_value,
-            "descent":tuple(float(x) for x in minima2), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
-            "minimizer": tuple(float(x) for x in min2_coords),
-            "min_value": arrival2_val,
-            "trajectory_length": length2,
-            "is_connected": "yes" if connected2 else "no",
-        }
-    ]
-    # Storing path data for visualizing further
+    result=[]
     connected_minimizers = []
     trajectories = []
-    minima_id =[] 
-    if connected1:
-        connected_minimizers.append(tuple(minima1.tolist()))
-        trajectories.append(traj1)
-        minima_id.append(int(idx_minima1))
-    if connected2:
-        connected_minimizers.append(tuple(minima2.tolist()))
-        trajectories.append(traj2)
-        minima_id.append(int(idx_minima2))
+    minima_id =[]
+    for offset_coords in offsets:
+        #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
+        model1 = nn_model(offset_coords)
+        minima1, arrival1_val, traj1 = optimize_lbfgs(model1, input, loss_fn, log_paths=True)   
+        minima1 = minima1[active_params]
+        min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df)   
+        length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
+        
+        #Making table for results found
+        result.append(
+            {
+                "saddle_point": tuple(saddle_point.tolist()),
+                "saddle_value": saddle_value,
+                "descent":tuple(float(x) for x in minima1), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
+                "minimizer": tuple(float(x) for x in min1_coords),
+                "min_value": arrival1_val,
+                "trajectory_length": length1,
+                "is_connected": "yes" if connected1 else "no"
+            }
+        ) 
+        if connected1:
+            connected_minimizers.append(tuple(minima1.tolist()))
+            trajectories.append(traj1)
+            minima_id.append(int(idx_minima1))
 
     path_data = None
     if connected_minimizers:
@@ -161,7 +159,8 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model):
             "saddle_id": idx_saddle,
             "minima_id": minima_id
         }
-    return result,path_data
+    
+    return result, path_data
 
 def save_descent_paths(paths):
     """
@@ -203,7 +202,7 @@ def extract_connection_indices(all_results, critical_points_df):
         for idx, row in critical_points_df.iterrows()
     }
     dim = len(x_cols)
-    output_file=f'{base_dir}/saddle_to_minima_indices{dim}D.csv'
+    output_file=f'{base_dir}/connectivity_graph.csv'
     connection_rows = []
     for entry in all_results:
         if entry["is_connected"] == "yes":
@@ -221,7 +220,7 @@ def extract_connection_indices(all_results, critical_points_df):
     df.to_csv(output_file, index=False)
     print(f"Saved {len(df)} connections to {output_file}")
 
-def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, return_paths=False ):
+def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, input, return_paths=False):
     """
     Trace connectivity from saddle points to minima.
 
@@ -245,7 +244,7 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, return_
     for idx, row in saddles_df.iterrows():
         saddle_point = [row[col] for col in sorted(row.index) if col.startswith("x")]
 
-        results,path_data = trace_from_saddle(saddle_point, minima_df, idx, func, nn_model)
+        results, path_data = trace_from_saddle(saddle_point, minima_df, idx, func, nn_model, input, log_paths=return_paths)
         all_results.extend(results)
         if path_data is not None:
             paths.append(path_data)
@@ -254,7 +253,6 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, return_
         ([row[col] for col in sorted(row.index) if col.startswith("x")], row["f_value"])
         for _, row in minima_df.iterrows()
     ]
-
 
     if return_paths:
         return all_results, minima, dataframe, paths
