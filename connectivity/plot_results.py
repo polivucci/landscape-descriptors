@@ -38,6 +38,7 @@ def plot_results_with_paths(func, critical_points_csv,
     ax = fig.gca()
 
     # Set up grid and evaluate function
+    if bounds==(0.0, 1.0): bounds = 2*((0.0, 1.0),)
     x = np.linspace(bounds[0][0], bounds[0][1], res)
     y = np.linspace(bounds[1][0], bounds[1][1], res)
     X, Y = np.meshgrid(x, y, indexing='ij')

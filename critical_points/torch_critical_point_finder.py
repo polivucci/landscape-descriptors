@@ -10,7 +10,8 @@ class TorchMinimaFinder:
         if bounds==(0.0, 1.0): bounds = dimension*((0.0, 1.0),)
         assert len(bounds)==dimension
         self.bounds = torch.tensor(bounds, device=device)
-        self.low_bounds, self.ranges = self.bounds[:,0], self.bounds[:,1]-self.bounds[:,0]
+        self.low_bounds, self.upp_bounds = self.bounds[:,0], self.bounds[:,1]
+        self.ranges = self.upp_bounds - self.low_bounds
         
         self.dimension = dimension
         self.min_distance = min_distance
@@ -41,13 +42,13 @@ class TorchMinimaFinder:
             self.update_kdtree()
         distances, _ = self.kdtree.query([point], k=1)
         return distances[0] < self.min_distance
+    
     def _is_out_bounds(self, point, tolerance=1e-6):
         """
         Check if point is outside the defined bounds (with optional tolerance).
         `point` should be a 1D torch tensor or numpy array.
         """
-        lower, upper = self.bounds
-        return torch.any(point < lower - tolerance) or torch.any(point > upper + tolerance)
+        return torch.any(point < self.low_bounds - tolerance) or torch.any(point > self.upp_bounds + tolerance)
 
     def add_minimum(self, point, value):
         point_np = point.detach().cpu().numpy()
@@ -66,7 +67,7 @@ class TorchMinimaFinder:
 from critical_points.optimizers import optimize_lbfgs, optimize_newton
 def run_local_search(optimizer, model, input, loss_fn, **optimizer_kwargs):
     _, final_val, path = optimizer(model, input, loss_fn, **optimizer_kwargs)
-    if optimizer_kwargs['log_paths']: print(pd.DataFrame(path).tail(10))
+    # if optimizer_kwargs['log_paths']: print(pd.DataFrame(path).tail(10))
     fin_point = torch.nn.utils.parameters_to_vector(model.parameters()).detach()
     return fin_point, final_val
 
