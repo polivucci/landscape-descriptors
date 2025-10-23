@@ -22,8 +22,9 @@ class Schwefel2D(nn.Module):
     """
     def __init__(self, x1_init, x2_init):
         super().__init__()
-        self.x1 = nn.Parameter(torch.tensor(float(x1_init)))
-        self.x2 = nn.Parameter(torch.tensor(float(x2_init)))
+        self.x1 = nn.Parameter(x1_init)
+        self.x2 = nn.Parameter(x2_init)
+        self._init_args = x1_init, x2_init
 
     def forward(self, input):
         # For ML consistency: return parameters as a vector
@@ -36,9 +37,10 @@ class Schwefel3D(nn.Module):
     """
     def __init__(self, x1_init, x2_init, x3_init):
         super().__init__()
-        self.x1 = nn.Parameter(torch.tensor(float(x1_init)))
-        self.x2 = nn.Parameter(torch.tensor(float(x2_init)))
-        self.x3 = nn.Parameter(torch.tensor(float(x3_init)))
+        self.x1 = nn.Parameter(x1_init)
+        self.x2 = nn.Parameter(x2_init)
+        self.x3 = nn.Parameter(x3_init)
+        self._init_args = x1_init, x2_init, x3_init
 
     def forward(self, input):
         # For ML consistency: return parameters as a vector
@@ -51,10 +53,11 @@ class Schwefel4D(nn.Module):
     """
     def __init__(self, x1_init, x2_init, x3_init, x4_init):
         super().__init__()
-        self.x1 = nn.Parameter(torch.tensor(float(x1_init)))
-        self.x2 = nn.Parameter(torch.tensor(float(x2_init)))
-        self.x3 = nn.Parameter(torch.tensor(float(x3_init)))
-        self.x4 = nn.Parameter(torch.tensor(float(x4_init)))
+        self.x1 = nn.Parameter(x1_init)
+        self.x2 = nn.Parameter(x2_init)
+        self.x3 = nn.Parameter(x3_init)
+        self.x4 = nn.Parameter(x4_init)
+        self._init_args = x1_init, x2_init, x3_init, x4_init
 
     def forward(self, input):
         # For ML consistency: return parameters as a vector
@@ -70,22 +73,6 @@ def schwefel2D_numpy(*x):
     # combined nnmodule+schwefel loss machinery
     x = [torch.tensor(xi) for xi in x]
     model = Schwefel2D(*x)
-    coords = model(x)                        # get parameters [x1, x2]
+    coords = model([])                        # get parameters [x1, x2]
     loss = _schwefel(*coords)                 # evaluate Schwefel loss
     return float(loss.item())               # return scalar for NumPy
-
-def schwefel3D_numpy(*x):
-    # combined nnmodule+schwefel loss machinery
-    x = [torch.tensor(xi) for xi in x]
-    model = Schwefel3D(*x)
-    coords = model(x)                        # get parameters [x1, x2]
-    loss = _schwefel(*coords)                 # evaluate Schwefel loss
-    return float(loss.item())      
-
-def schwefel4D_numpy(*x):
-    # combined nnmodule+schwefel loss machinery
-    x = [torch.tensor(xi) for xi in x]
-    model = Schwefel4D(*x)
-    coords = model(x)                        # get parameters [x1, x2]
-    loss = _schwefel(*coords)                 # evaluate Schwefel loss
-    return float(loss.item())      
