@@ -1,7 +1,10 @@
-import torch
-import pandas as pd
-import numpy as np
 import os
+
+import torch
+from numpy.linalg import norm as numpynorm
+from numpy import float64 as numpyfloat64
+import pandas as pd
+
 from critical_points.optimizers import optimize_lbfgs
 from critical_points.torch_critical_point_finder import run_local_search
 
@@ -60,60 +63,25 @@ def offset_near_saddle(saddle_point, model_saddle, input, loss_func, epsilon=0.0
     
     return offset_points
 
-# def offset_near_saddle(saddle_point, func, epsilon=0.01):
-#     """
-#     Offset the saddle point along its most unstable direction,
-#     scaled by radius of curvature (1 / |eigenvalue|).
-#     """
-#     point = saddle_point.clone().detach().requires_grad_(True)
-
-#     # Compute Hessian
-#     hessian = torch.autograd.functional.hessian(func, point)
-
-#     # Eigendecomposition
-#     eigvals, eigvecs = torch.linalg.eigh(hessian)
-    
-#     # Get most negative eigenvalue and its eigenvector (unstable direction)
-#     unstable_idx = torch.argmin(eigvals)
-#     unstable_eigval = eigvals[unstable_idx]
-#     unstable_direction = eigvecs[:, unstable_idx]
-
-#     # Radius of curvature = 1 / |λ|
-#     radius_of_curvature = 1.0 / torch.abs(unstable_eigval)
-
-#     # Offset distance = ε * radius_of_curvature
-#     offset_distance = epsilon * radius_of_curvature
-
-#     # Offset along unstable direction
-#     direction = unstable_direction / torch.norm(unstable_direction)
-#     return saddle_point + offset_distance * direction, saddle_point - offset_distance * direction
-
-
 
 def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
-    """ Find closest known minimum and check if within threshold
+    """ Find closest known minimum and check if within threshold.
+    Uses NumPy because of Pandas.
     """
-    # x_cols = sorted([col for col in minima_df.columns if col.startswith("x")])
-    # dists = minima_df.apply(
-    #     lambda r: np.linalg.norm(min_point.numpy() - r[x_cols].values.astype(np.float32)),
-    #     axis=1
-    # )
-    # closest_idx = dists.idxmin()
-    # return minima_df.loc[closest_idx][x_cols].tolist(), dists.min() < threshold, closest_idx
     x_cols = sorted([col for col in minima_df.columns if col.startswith("x")])
     dists = minima_df.apply(
-        lambda r: np.linalg.norm(min_point.numpy() - r[x_cols].values.astype(np.float64)),
+        lambda r: numpynorm(min_point.numpy() - r[x_cols].values.astype(numpyfloat64)),
         axis=1
     )
     closest_idx = dists.idxmin()
     return minima_df.loc[closest_idx][x_cols].tolist(), dists.min() < threshold, closest_idx
 
-
-def trajectory_length(traj):
-    """
-    Get Total length of the trajectory for the actual Descent path
-    """
-    return sum(np.linalg.norm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
+# TODO: do trajectory lengths without numpy
+# def trajectory_length(traj):
+#     """
+#     Get Total length of the trajectory for the actual Descent path
+#     """
+#     return sum(numpynorm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
 
 def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, input, log_paths=False):
     """
@@ -139,7 +107,7 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, in
         minima1 = minima1[active_params]
         min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df)   
 
-        length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
+        # length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
         
         #Making table for results found
         result.append(
@@ -149,7 +117,7 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, in
                 "descent":tuple(float(x) for x in minima1), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
                 "minimizer": tuple(float(x) for x in min1_coords),
                 "min_value": arrival1_val,
-                "trajectory_length": length1,
+                # "trajectory_length": length1,
                 "is_connected": "yes" if connected1 else "no"
             }
         ) 
