@@ -16,13 +16,13 @@ from connectivity.saddle_tree_utils import (
 )
 from collections import defaultdict
 
-def saddle_tree_calculations(results, minima, dataframe):
+def saddle_tree_calculations(results, minima, dataframe, out_dir='./'):
 
     unique_saddles, unique_minima = get_unique_nodes(results, minima)
     saddle_y_values, minima_y_values = get_function_values(results, minima)
     
     all_nodes, all_values, all_types, index_map = map_coords_to_indices(dataframe)
-    print('index_map', index_map)
+    # print('index_map', index_map)
 
     # Build mapping from minima to saddles
     minima_to_saddles, saddle_to_minima = build_saddle_minima_mapping(
@@ -66,5 +66,5 @@ def saddle_tree_calculations(results, minima, dataframe):
     # dfs_order_list = reversed(list(range(len(all_nodes))))
     # print('dfs_order_list', dfs_order_list)
 
-    save_tree_nodes_csv(all_nodes, index_map, saddle_y_values, minima_y_values, dfs_order_list)
-    save_tree_edges_csv(pruned_edges, index_map)
+    save_tree_nodes_csv(all_nodes, index_map, saddle_y_values, minima_y_values, dfs_order_list, out_dir=out_dir)
+    save_tree_edges_csv(pruned_edges, index_map, out_dir=out_dir)

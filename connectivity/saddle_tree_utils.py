@@ -259,9 +259,9 @@ def dfs_order(mst_edges, node_count, root_id, all_values, ids):
     for u, v in mst_edges:
         tree[u].add(v)
         tree[v].add(u)
-
+    
     for u in tree.keys():
-        tree[u] = sorted(tree[u], key=lambda n: all_values[ids[n]])
+        tree[u] = sorted(tree[u], key=lambda n: all_values[n])
 
     visited = [False] * node_count
     order = []
@@ -315,8 +315,9 @@ def map_coords_to_indices(critical_points_df):
     return all_nodes, all_values, all_types, index_map
 
 def save_tree_nodes_csv(
-    all_nodes, index_map, saddle_y_values:dict, minima_y_values:dict, dfs_order_list, output_file="results/tree_nodes.csv"
+    all_nodes, index_map, saddle_y_values:dict, minima_y_values:dict, dfs_order_list, out_dir='./'
 ):
+    output_file=out_dir+"tree_nodes.csv"
     rows = []
     for order_idx, internal_idx in enumerate(dfs_order_list):
         coord = all_nodes[internal_idx]
@@ -328,7 +329,8 @@ def save_tree_nodes_csv(
     print(f"Saved node order to {output_file}")
 
 
-def save_tree_edges_csv(mst_edges, ids, output_file="results/tree_connectivity.csv"):
+def save_tree_edges_csv(mst_edges, ids, out_dir='./'):
+    output_file=out_dir+"tree_connectivity.csv"
     rows = [(ids[i], ids[j]) for i, j in mst_edges]
     df = pd.DataFrame(rows, columns=["index_1", "index_2"])
     df.to_csv(output_file, index=False)
@@ -351,6 +353,7 @@ def prune_graph(values, ids, edges, types, root_id):
     
     # Check the type2 node with max value
     root_pos = ids.index(root_id)
+    # print(root_id, root_pos)
     assert values[root_pos] == max(values)
     max_type2 = root_id
     

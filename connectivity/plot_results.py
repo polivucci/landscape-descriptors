@@ -23,8 +23,8 @@ text_color = "black"
 cmap = cm.RdPu
 
 
-def plot_results_with_paths(func, critical_points_csv, 
-                            saddle_to_minima_csv, bounds=(0, 1),
+def plot_results_with_paths(func, critical_points_df, 
+                            connectivity_df, bounds=(0, 1),
                             res=100, txtpad=0.015, fig=None):
     """
     Visualize function landscape with minima, saddle points, and descent paths
@@ -50,18 +50,18 @@ def plot_results_with_paths(func, critical_points_csv,
     contour = ax.contourf(X, Y, Z, levels=20, cmap=cmap)
     fig.colorbar(contour, label='Function Value')
 
-    if critical_points_csv is not None:
+    if critical_points_df is not None:
 
         # Load data 
-        crit_df = pd.read_csv(critical_points_csv)
-
+        crit_df = critical_points_df
+        
         saddle_indices = crit_df[crit_df['type']=='saddle'].index.to_list()
         minima_indices = crit_df[crit_df['type']=='minimum'].index.to_list()
 
         # Plot minima with labels
         minima_coords = []
         for i in minima_indices:
-            row = crit_df.iloc[i]
+            row = crit_df.loc[i]
             point = (row['x1'], row['x2'])
             minima_coords.append(point)
             ax.text(point[0] + txtpad, point[1] + txtpad, f"M{i}", fontsize=8, color=text_color, zorder=10)
@@ -74,7 +74,7 @@ def plot_results_with_paths(func, critical_points_csv,
         # Plot saddle points with labels
         saddle_coords = []
         for i in saddle_indices:
-            row = crit_df.iloc[i]
+            row = crit_df.loc[i]
             point = (row['x1'], row['x2'])
             saddle_coords.append(point)
             ax.text(point[0] + txtpad, point[1] + txtpad, f"S{i}", fontsize=8, color=text_color, zorder=10)
@@ -84,17 +84,17 @@ def plot_results_with_paths(func, critical_points_csv,
             ax.scatter(saddle_coords[:, 0], saddle_coords[:, 1],
                     c=saddle_color, s=50, edgecolor=edge_color, linewidth=1.5, label='Saddles')
 
-        if saddle_to_minima_csv is not None:
-            conn_df = pd.read_csv(saddle_to_minima_csv)
+        if connectivity_df is not None:
+            conn_df = connectivity_df
 
             # Extracting the indices which are connected
-            saddle_indices = conn_df['index_saddle'].unique()
-            minima_indices = conn_df['index_minimum'].unique()
+            saddle_indices = conn_df['index_1'].unique()
+            minima_indices = conn_df['index_2'].unique()
 
             # Plot descent paths
             for _, row in conn_df.iterrows():
-                s_row = crit_df.iloc[int(row['index_saddle'])]
-                m_row = crit_df.iloc[int(row['index_minimum'])]
+                s_row = crit_df.loc[int(row['index_1'])]
+                m_row = crit_df.loc[int(row['index_2'])]
                 saddle = (s_row['x1'], s_row['x2'])
                 minimum = (m_row['x1'], m_row['x2'])
                 ax.annotate('', xy=minimum, xytext=saddle,

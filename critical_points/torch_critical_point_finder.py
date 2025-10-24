@@ -69,7 +69,7 @@ def run_local_search(optimizer, model, input, loss_fn, **optimizer_kwargs):
     _, final_val, path = optimizer(model, input, loss_fn, **optimizer_kwargs)
     # if optimizer_kwargs['log_paths']: print(pd.DataFrame(path).tail(10))
     fin_point = torch.nn.utils.parameters_to_vector(model.parameters()).detach()
-    return fin_point, final_val
+    return fin_point, final_val, path
 
 def flatten_hessian_blocks(H):
     """Written by ChatGPT.
@@ -124,6 +124,7 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
     Finds critical points using torch autograd + NNModule
     """
     finder = TorchMinimaFinder(bounds, dimension, min_distance, num_attempts, seed=seed, device=device)
+    optimizer_kwargs['bounds'] = {'low': finder.low_bounds, 'up': finder.upp_bounds}
 
     minima, maxima, saddles = [], [], []
 
@@ -148,20 +149,25 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
 
         print()
         print('__________________________________________________________________________________________')
-        print(f"Attempt {i+1}/{finder.m}: starting point {x0.cpu().numpy()}")
+        print(f"Attempt {i+1}/{finder.m}:")
         print(f"Starting point: {x0.cpu().numpy()}")
 
         # initialize NN module 
         mod = model_builder(x0)
 
+        # # algorithm 0: minima only, gradient descent
+        # final_point, final_val, path = run_local_search(optimize_lbfgs, mod, input, loss_func, **optimizer_kwargs)
+        # final_params, _ = torch.utils._pytree.tree_flatten(dict(mod.named_parameters()))
+        # grad = torch.cat([p.grad.flatten() for p in mod.parameters() if p.requires_grad])
+
         # # algorithm 1: gradient descent to minimize ||∇f||² 
         # sqgrad_model = sqgrad_class(*mod._init_args)
-        # final_point, final_val_sqgrad = run_local_search(optimize_lbfgs, sqgrad_model, input, identity_loss, lr=lr, steps=steps)
+        # final_point, final_val_sqgrad, path = run_local_search(optimize_lbfgs, sqgrad_model, input, identity_loss, **optimizer_kwargs)
         # final_params, _ = torch.utils._pytree.tree_flatten(dict(sqgrad_model.named_parameters()))
         # grad = torch.sqrt(final_val_sqgrad)
 
         # algorithm 2: uncorrected newton's method:
-        final_point, final_val = run_local_search(optimize_newton, mod, input, loss_func, **optimizer_kwargs)
+        final_point, final_val, path = run_local_search(optimize_newton, mod, input, loss_func, **optimizer_kwargs)
         final_params, _ = torch.utils._pytree.tree_flatten(dict(mod.named_parameters()))
         grad = torch.cat([p.grad.flatten() for p in mod.parameters() if p.requires_grad])
 
@@ -182,13 +188,13 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
             
             if index == 0:
                 minima.append((final_point, final_val, index))
-                print("minimum", final_point)
+                print("Type: minimum")
             elif index == dimension:
                 maxima.append((final_point, final_val, index))
-                print("maximum", final_point)
+                print("Type: maximum")
             else:
                 saddles.append((final_point, final_val, index))
-                print("saddle", final_point)
+                print("Type: saddle")
 
     # for point, value in finder.minima:
     #     point_t = torch.tensor(point, requires_grad=True)

@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 from critical_points.optimizers import optimize_lbfgs
+from critical_points.torch_critical_point_finder import run_local_search
 
 torch.set_default_dtype(torch.float64)
 
@@ -123,8 +124,6 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, in
     model_saddle = nn_model(saddle_point)
     active_params = [True if p.requires_grad else False for p in model_saddle.parameters()]
 
-    # offset_p1, offset_p2 = offset_near_saddle(saddle_point, loss_fn) #gets both offset point with curvature radius 
-    # offset_p1, offset_p2 = offset_near_saddle(saddle_point, model_saddle, input, loss_fn, epsilon=0.01) 
     offsets = offset_near_saddle(saddle_point, model_saddle, input, loss_fn, epsilon=0.01) 
 
     saddle_value = loss_fn(model_saddle(input)).item() #Get exact saddle value for plotting on tree
@@ -136,9 +135,10 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, in
     for offset_coords in offsets:
         #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
         model1 = nn_model(offset_coords)
-        minima1, arrival1_val, traj1 = optimize_lbfgs(model1, input, loss_fn, log_paths=True)   
+        minima1, arrival1_val, traj1 = run_local_search(optimize_lbfgs, model1, input, loss_fn, log_paths=True)   
         minima1 = minima1[active_params]
         min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df)   
+
         length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
         
         #Making table for results found
@@ -170,14 +170,13 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, in
     
     return result, path_data
 
-def save_descent_paths(paths):
+def save_descent_paths(paths, out_dir='./'):
     """
     Save descent paths to individual CSV files:
     Format: descent_path_S{saddle_index}_M{min_index}.csv
     Each file contains a trajectory: x, y coordinates
     """
-    base_dir = "descent_paths"
-    os.makedirs(base_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     for path in paths:
         saddle_idx = path.get("saddle_id")
         minima_indices = path.get("minima_id", [])
@@ -192,16 +191,16 @@ def save_descent_paths(paths):
             columns = [f"x{i}" for i in range(dim)] + ["loss"]
             df = pd.DataFrame(rows, columns=columns)
             filename = f"descent_path_S{saddle_idx}_M{min_idx}.csv"
-            filepath = os.path.join(base_dir, filename)
+            filepath = os.path.join(out_dir, filename)
             df.to_csv(filepath, index=False)
 
-def extract_connection_indices(all_results, critical_points_df):
+def extract_connection_indices(all_results, critical_points_df, out_dir='./'):
     """
     From all_results, generate a CSV with index_saddle and index_minimum
     corresponding to connected pairs in the original critical_points.csv
     """
-    base_dir = "results"
-    os.makedirs(base_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
+    
     # Create a mapping from (x1, x2)or(x1, x2, x3) → index in critical_points.csv
     x_cols = sorted([col for col in critical_points_df.columns if col.startswith("x")])
 
@@ -210,7 +209,7 @@ def extract_connection_indices(all_results, critical_points_df):
         for idx, row in critical_points_df.iterrows()
     }
     dim = len(x_cols)
-    output_file=f'{base_dir}/connectivity_graph.csv'
+    output_file=f'{out_dir}/connectivity_graph.csv'
     connection_rows = []
     for entry in all_results:
         if entry["is_connected"] == "yes":
@@ -224,7 +223,7 @@ def extract_connection_indices(all_results, critical_points_df):
                 connection_rows.append((idx_saddle, idx_minima))
 
     # Save to CSV
-    df = pd.DataFrame(connection_rows, columns=["index_saddle", "index_minimum"])
+    df = pd.DataFrame(connection_rows, columns=["index_1", "index_2"])
     df.to_csv(output_file, index=False)
     print(f"Saved {len(df)} connections to {output_file}")
 
@@ -246,7 +245,6 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, input, 
         dataframe: passed-through dataframe.
         paths (optional): list of descent path data, if return_paths=True.
     """
-    os.makedirs("plots", exist_ok=True)
     all_results = []
     paths=[]
     for idx, row in saddles_df.iterrows():

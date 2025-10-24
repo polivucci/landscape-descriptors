@@ -3,7 +3,7 @@ from torch.optim import LBFGS
 from torch.nn.utils import parameters_to_vector
 
 
-def optimize_lbfgs(model, input, loss_fn , lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5, log_paths=False):
+def optimize_lbfgs(model, input, loss_fn, lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5, log_paths=False, bounds=None):
     """
     Optimize using PyTorch's LBFGS to find local minimum.
     """
@@ -21,32 +21,45 @@ def optimize_lbfgs(model, input, loss_fn , lr=1e-3, max_iter=100, atol=1e-6, rto
                 trajectory.append((parameters_to_vector(model.parameters()).clone().detach(), loss.item())) 
             return loss
 
+    active = [True if p.requires_grad else False for p in model.parameters()]
     prev_coords = parameters_to_vector(model.parameters()).detach() # initial coords
-    for _ in range(max_iter):
+    for it in range(max_iter):
         loss = optimizer.step(closure)
 
         coords = parameters_to_vector(model.parameters()).clone().detach()
 
         # stopping criterion
+        # grad = torch.cat([p.grad.flatten() for p in model.parameters() if p.requires_grad])
+        # small_grad = torch.norm(grad) < rtol
+        # if small_grad or close:
         try:
+            # assert small_grad
             torch.testing.assert_close(
                 coords, prev_coords, atol=atol, rtol=rtol
             )
-            # if assert_close passes, break early
+            # if assert passes, break
             break
         except AssertionError:
             pass
 
-        # Detach to avoid graph blow-up (memory leak)
+        # bound check
+        if bounds is not None:
+            if torch.any(coords[active] < bounds['low']) or torch.any(coords[active] > bounds['up']): 
+                print('out of bounds', coords[active])
+                conv = True
+                print(f"Out of bounds at {it} iterations.")
+                break
+
+        # Required when optimising Sqgrad: Detach to avoid graph blow-up (memory leak) 
         for p in model.parameters():
             p.grad = None
 
         prev_coords = coords
 
-    return coords, loss, trajectory  # Return both final point and path
+    return model, loss, trajectory  # Return both final point and path
 
 
-def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_paths=False):
+def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_paths=False, bounds=None):
     """
     Converge to a critical point (grad(loss_fn) = 0) of the loss function with respect to model parameters
     using Newton's method with no additional modification to make the Hessian positive definite.
@@ -54,8 +67,8 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
     # Flatten model parameters into a single vector for Hessian computation
     trajectory = []  # for optional log trajectory
     
-    conv = False
-    while conv==False: # simple adaptive learning rate
+    conv = False; oob=False
+    while conv==False and oob==False: # simple adaptive learning rate
         params = [p for p in model.parameters() if p.requires_grad]
         prev_coords = parameters_to_vector(params).clone().detach()
         print('learning rate', lr)
@@ -72,7 +85,6 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
             # Gradients into vector
             grad = torch.cat([g.flatten() for g in grad1])
             # grad = torch.cat([p.grad.flatten() for p in params])
-            
             
             # Build Hessian 
             n_params = grad.numel()
@@ -110,6 +122,13 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
                 print(f"Converged after {it} iterations.")
                 break
 
+            if bounds is not None:
+                if torch.any(coords < bounds['low']) or torch.any(coords > bounds['up']): 
+                    # print('out of bounds', coords)
+                    oob = True
+                    print(f"Out of bounds at {it} iterations.")
+                    break
+
             coords = prev_coords
         
         # print(trajectory[0])
@@ -122,7 +141,5 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
     # load gradients into the model
     for p, g in zip(params, grad1):
         p.grad = g
-
-    if not conv: print(f"Max iterations exceeded. Last position: ", parameters_to_vector(params).clone().detach(), diff)
 
     return model, loss, trajectory
