@@ -62,6 +62,23 @@ class TorchMinimaFinder:
             self.update_kdtree()
             return True
         return False
+    def load_from_dataframe(self, df):
+        """
+        Load previously found minima from a DataFrame.
+        Expected columns: x1, x2, ..., f_value
+        Stores the loaded points as (torch.Tensor, float) tuples in self.minima.
+        """
+        loaded = 0
+        for _, row in df.iterrows():
+            coords = [row[f'x{i+1}'] for i in range(self.dimension)]
+            value = row['f_value']
+            point = torch.tensor(coords, dtype=torch.float32, device=self.device)
+            if not self._is_out_bounds(point) and not self._is_too_close(point.cpu().numpy()):
+                self.minima.append((point, value))
+                loaded += 1
+        self.update_kdtree()
+        print(f"Loaded {loaded} valid minima from dataframe.")
+
 
 # Torch gradient descent
 from critical_points.optimizers import optimize_lbfgs, optimize_newton
@@ -119,11 +136,15 @@ def construct_SquaredGradModel(base_model_class, base_loss):
 # ---- Main search ----
 def find_critical_points_torch(model_builder, loss_func, input, bounds, dimension=2,
                                num_attempts=64, min_distance=0.01, seed=42,
-                               device="cpu", **optimizer_kwargs):
+                               device="cpu",resume_df=None, **optimizer_kwargs):
     """
     Finds critical points using torch autograd + NNModule
     """
     finder = TorchMinimaFinder(bounds, dimension, min_distance, num_attempts, seed=seed, device=device)
+    if resume_df is not None:
+        finder.load_from_dataframe(resume_df)
+        print(f"Resuming with {len(finder.minima)} loaded points.")
+
     optimizer_kwargs['bounds'] = {'low': finder.low_bounds, 'up': finder.upp_bounds}
 
     minima, maxima, saddles = [], [], []
@@ -141,7 +162,7 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
         as function like torch.func.hessian from torch.func expect a single input tensor or PyTree (nested dict) of tensors.
         and functional calls work with nested dicts (i.e. unflattened).
         """
-        params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) # see ChatGPT convo
+        params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) 
         y = torch.func.functional_call(mod0, params_dict, (input,))
         return loss_func(y)
 
