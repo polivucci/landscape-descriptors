@@ -25,7 +25,7 @@ cmap = cm.RdPu
 
 def plot_results_with_paths(func, critical_points_df, 
                             connectivity_df, bounds=(0, 1),
-                            res=100, txtpad=0.015, fig=None):
+                            res=100, txtpad=0.015, fig=None, **plot_kwargs):
     """
     Visualize function landscape with minima, saddle points, and descent paths
     with consistent labels S0/S1.. for saddle points and M0/M1.. for minima.
@@ -47,7 +47,7 @@ def plot_results_with_paths(func, critical_points_df,
 
     # 2D Contour plot
     
-    contour = ax.contourf(X, Y, Z, levels=20, cmap=cmap)
+    contour = ax.contourf(X, Y, Z, levels=20, cmap=cmap, **plot_kwargs)
     fig.colorbar(contour, label='Function Value')
 
     if critical_points_df is not None:

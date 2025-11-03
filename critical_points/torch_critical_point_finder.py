@@ -31,11 +31,15 @@ class TorchMinimaFinder:
         self.x0s += self.low_bounds
         # self.kdtree_x0s = KDTree([x0 for x0 in self.x0s])
 
+    def _unit_cube(self, x):
+        return (x-self.low_bounds.numpy())/self.ranges.numpy()
+
     def update_kdtree(self):
         if self.minima:
-            self.kdtree = KDTree([m[0] for m in self.minima])
+            self.kdtree = KDTree([self._unit_cube(m[0]) for m in self.minima])
 
     def _is_too_close(self, point):
+        point = self._unit_cube(point)
         if not self.minima:
             return False
         if self.kdtree is None:
@@ -52,10 +56,10 @@ class TorchMinimaFinder:
 
     def add_minimum(self, point, value):
         point_np = point.detach().cpu().numpy()
-        print(point_np, "Reject:", self._is_too_close(point_np) or bool(self._is_out_bounds(point)))
-
+        print("Reject:", self._is_too_close(point_np) or bool(self._is_out_bounds(point)))
         if self._is_out_bounds(point):
-            print(f"Rejected: Out of bounds -> {point.tolist()}")
+            return False
+        if self._is_too_close(point_np):
             return False
         if not self._is_too_close(point_np):
             self.minima.append((point_np, value))
@@ -84,7 +88,10 @@ class TorchMinimaFinder:
 from critical_points.optimizers import optimize_lbfgs, optimize_newton
 def run_local_search(optimizer, model, input, loss_fn, **optimizer_kwargs):
     _, final_val, path = optimizer(model, input, loss_fn, **optimizer_kwargs)
-    # if optimizer_kwargs['log_paths']: print(pd.DataFrame(path).tail(10))
+    # try: 
+    #     if optimizer_kwargs['log_paths']: print(pd.DataFrame(path).tail(10))
+    # except: 
+    #     pass
     fin_point = torch.nn.utils.parameters_to_vector(model.parameters()).detach()
     return fin_point, final_val, path
 
@@ -134,6 +141,12 @@ def construct_SquaredGradModel(base_model_class, base_loss):
     return SquaredGradModel
 
 # ---- Main search ----
+from memory_profiler import profile
+
+def comp_hessian(func, params):
+        return torch.func.hessian(func)(params)
+
+# @profile
 def find_critical_points_torch(model_builder, loss_func, input, bounds, dimension=2,
                                num_attempts=64, min_distance=0.01, seed=42,
                                device="cpu",resume_df=None, **optimizer_kwargs):
@@ -151,7 +164,15 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
 
     mod0 = model_builder(finder.x0s[0])
     model_class = type(mod0)
-    active_params = [True if p.requires_grad else False for p in mod0.parameters()]
+    active_params_named =  {k: True if v.requires_grad else False for k, v in mod0.named_parameters()}
+    active_params = list(active_params_named.values())
+    active_params_names = [k for k, v in active_params_named.items() if v]
+    
+    # for the optimizer, sort bounds based on model internal order:
+    low_bounds = torch.tensor([bounds[k][0] for k in active_params_names])
+    upp_bounds = torch.tensor([bounds[k][1] for k in active_params_names])
+    optimizer_kwargs['bounds'] = {'low': low_bounds, 'up': upp_bounds}
+    
     sqgrad_class = construct_SquaredGradModel(model_class, loss_func)
     
     _, unflatten = torch.utils._pytree.tree_flatten(dict(mod0.named_parameters()))
@@ -162,12 +183,14 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
         as function like torch.func.hessian from torch.func expect a single input tensor or PyTree (nested dict) of tensors.
         and functional calls work with nested dicts (i.e. unflattened).
         """
-        params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) 
-        y = torch.func.functional_call(mod0, params_dict, (input,))
+        # print('flat_params', flat_params)
+        params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) # see ChatGPT convo
+        # print('params_dict', params_dict)
+        y = torch.func.functional_call(mod0, params_dict, (input,), strict=True)
         return loss_func(y)
 
     for i, x0 in enumerate(finder.x0s):
-
+        # if (i+1)!=325: continue
         print()
         print('__________________________________________________________________________________________')
         print(f"Attempt {i+1}/{finder.m}:")
@@ -189,20 +212,24 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
 
         # algorithm 2: uncorrected newton's method:
         final_point, final_val, path = run_local_search(optimize_newton, mod, input, loss_func, **optimizer_kwargs)
-        final_params, _ = torch.utils._pytree.tree_flatten(dict(mod.named_parameters()))
+        detached_params = {k: v.detach() for k, v in mod.named_parameters()} # detach to avoid memory blow up
+        final_params, _ = torch.utils._pytree.tree_flatten(detached_params)
         grad = torch.cat([p.grad.flatten() for p in mod.parameters() if p.requires_grad])
 
         # filter active parameters
         final_point = final_point[active_params]
         final_val = eval_loss_fn_params(final_params)
-        print('check grad', grad)
+        print(f"Arrival point: {final_point.cpu().numpy()}")
+        print('check grad:', grad)
+        final_point = torch.tensor([detached_params[name] for name in bound_params_names])
         critical=False
         # check grad is small and final_point is new
-        if torch.norm(grad)<1e-5: critical = finder.add_minimum(final_point, final_val.item()) 
+        if torch.norm(grad)<gradtol: critical = finder.add_minimum(final_point, final_val.item()) 
         
         # Classify critical point
         if critical:
-            hessian = torch.func.hessian(eval_loss_fn_params)(final_params)
+            hessian = comp_hessian(eval_loss_fn_params, final_params)
+            # hessian = torch.func.hessian(eval_loss_fn_params)(final_params)
             hessian = flatten_hessian_blocks(hessian)
             hessian = hessian[active_params][:, active_params]
             index = _torch_critical_point_index(hessian)

@@ -45,14 +45,14 @@ def optimize_lbfgs(model, input, loss_fn, lr=1e-3, max_iter=100, atol=1e-6, rtol
         # bound check
         if bounds is not None:
             if torch.any(coords[active] < bounds['low']) or torch.any(coords[active] > bounds['up']): 
-                print('out of bounds', coords[active])
+                # print('out of bounds', coords[active])
                 conv = True
                 print(f"Out of bounds at {it} iterations.")
                 break
 
-        # Required when optimising Sqgrad: Detach to avoid graph blow-up (memory leak) 
-        for p in model.parameters():
-            p.grad = None
+        # # Required when optimising Sqgrad: Detach to avoid graph blow-up (memory leak) 
+        # for p in model.parameters():
+        #     p.grad = None
 
         prev_coords = coords
 
@@ -67,8 +67,9 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
     # Flatten model parameters into a single vector for Hessian computation
     trajectory = []  # for optional log trajectory
     
+    lr0 = lr
     conv = False; oob=False
-    while conv==False and oob==False: # simple adaptive learning rate
+    while conv==False and oob==False and lr>=lr0*1e-3: # simple adaptive learning rate
         params = [p for p in model.parameters() if p.requires_grad]
         prev_coords = parameters_to_vector(params).clone().detach()
         print('learning rate', lr)
@@ -124,7 +125,7 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
 
             if bounds is not None:
                 if torch.any(coords < bounds['low']) or torch.any(coords > bounds['up']): 
-                    # print('out of bounds', coords)
+                    # print('out of bounds', coords, bounds)
                     oob = True
                     print(f"Out of bounds at {it} iterations.")
                     break
@@ -132,11 +133,13 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
             coords = prev_coords
         
         # print(trajectory[0])
-        # print(trajectory[-1])
+        # print(trajectory[-1:])
 
         # if failure to converge, decimate learning rate
         lr *= 0.1
         # max_iter *= 10
+
+    if not conv and not oob: print(f"Failed to converge.")
 
     # load gradients into the model
     for p, g in zip(params, grad1):
