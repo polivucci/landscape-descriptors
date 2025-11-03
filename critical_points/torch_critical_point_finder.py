@@ -8,8 +8,9 @@ torch.set_default_dtype(torch.float64)
 class TorchMinimaFinder:
     def __init__(self, bounds=(0.0, 1.0), dimension=2, min_distance=0.01, m=64, device="cpu", seed=42):
         if bounds==(0.0, 1.0): bounds = dimension*((0.0, 1.0),)
+        if isinstance(bounds, dict): bounds = tuple(bounds.values())
         assert len(bounds)==dimension
-        self.bounds = torch.tensor(bounds, device=device)
+        self.bounds = torch.as_tensor(bounds, device=device, dtype=torch.get_default_dtype())
         self.low_bounds, self.upp_bounds = self.bounds[:,0], self.bounds[:,1]
         self.ranges = self.upp_bounds - self.low_bounds
         
@@ -66,6 +67,7 @@ class TorchMinimaFinder:
             self.update_kdtree()
             return True
         return False
+    
     def load_from_dataframe(self, df):
         """
         Load previously found minima from a DataFrame.
@@ -221,9 +223,10 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
         final_val = eval_loss_fn_params(final_params)
         print(f"Arrival point: {final_point.cpu().numpy()}")
         print('check grad:', grad)
-        final_point = torch.tensor([detached_params[name] for name in bound_params_names])
+        final_point = torch.tensor([detached_params[name] for name in active_params_names])
         critical=False
         # check grad is small and final_point is new
+        gradtol = 1e-5 or optimizer_kwargs['gradtol']
         if torch.norm(grad)<gradtol: critical = finder.add_minimum(final_point, final_val.item()) 
         
         # Classify critical point
