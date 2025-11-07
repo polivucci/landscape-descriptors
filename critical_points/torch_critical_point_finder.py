@@ -2,6 +2,7 @@ import torch
 from torch.quasirandom import SobolEngine
 from scipy.spatial import KDTree
 import pandas as pd
+from memory_profiler import profile
 
 torch.set_default_dtype(torch.float64)
 
@@ -25,6 +26,9 @@ class TorchMinimaFinder:
         self.seed = seed
         self.generate_starting_points()
 
+        self.minima_counts = []
+        self.total_converged = 0
+
     def generate_starting_points(self):
         sampler = SobolEngine(dimension=self.dimension, scramble=True, seed=self.seed)
         self.x0s = sampler.draw(self.m).to(self.device)
@@ -45,8 +49,13 @@ class TorchMinimaFinder:
             return False
         if self.kdtree is None:
             self.update_kdtree()
-        distances, _ = self.kdtree.query([point], k=1)
-        return distances[0] < self.min_distance
+        distances, indices = self.kdtree.query([point], k=1)
+        if distances[0] < self.min_distance:
+            idx = indices[0]
+            self.minima_counts[idx] += 1      # Increment count for this minimum
+            self.total_converged += 1         # Increment total converged
+            return True
+        return False
     
     def _is_out_bounds(self, point, tolerance=1e-6):
         """
@@ -64,6 +73,7 @@ class TorchMinimaFinder:
             return False
         if not self._is_too_close(point_np):
             self.minima.append((point_np, value))
+            self.minima_counts.append(1)
             self.update_kdtree()
             return True
         return False
@@ -81,10 +91,16 @@ class TorchMinimaFinder:
             point = torch.tensor(coords, dtype=torch.float32, device=self.device)
             if not self._is_out_bounds(point) and not self._is_too_close(point.cpu().numpy()):
                 self.minima.append((point, value))
+                self.minima_counts.append(0)
                 loaded += 1
         self.update_kdtree()
         print(f"Loaded {loaded} valid minima from dataframe.")
 
+    def get_basin_stats(self):
+        """
+    Returns a list of (minimum_point, count) and the total converged attempts.
+    """
+        return list(zip(self.minima, self.minima_counts)), self.total_converged
 
 # Torch gradient descent
 from critical_points.optimizers import optimize_lbfgs, optimize_newton
