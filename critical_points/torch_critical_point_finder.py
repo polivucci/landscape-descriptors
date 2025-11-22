@@ -138,7 +138,7 @@ def _torch_critical_point_index(hessian, tol=1e-9):
 
 def identity_loss(y):
     """
-    Dummy loss needed for compatibility.
+    Dummy loss needed for compatibility in the ||∇f||² method.
     """
     return y
 
@@ -165,7 +165,7 @@ def comp_hessian(func, params):
         return torch.func.hessian(func)(params)
 
 # @profile
-def find_critical_points_torch(model_builder, loss_func, input, bounds, dimension=2,
+def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_only=False, dimension=2,
                                num_attempts=64, min_distance=0.01, seed=42,
                                device="cpu",resume_df=None, **optimizer_kwargs):
     """
@@ -176,6 +176,8 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
         finder.load_from_dataframe(resume_df)
         print(f"Resuming with {len(finder.minima)} loaded points.")
 
+    optimizer=optimize_newton
+    if minima_only: optimizer=optimize_lbfgs
     optimizer_kwargs['bounds'] = {'low': finder.low_bounds, 'up': finder.upp_bounds}
 
     minima, maxima, saddles = [], [], []
@@ -229,7 +231,7 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, dimensio
         # grad = torch.sqrt(final_val_sqgrad)
 
         # algorithm 2: uncorrected newton's method:
-        final_point, final_val, path = run_local_search(optimize_newton, mod, input, loss_func, **optimizer_kwargs)
+        final_point, final_val, path = run_local_search(optimizer, mod, input, loss_func, **optimizer_kwargs)
         detached_params = {k: v.detach() for k, v in mod.named_parameters()} # detach to avoid memory blow up
         final_params, _ = torch.utils._pytree.tree_flatten(detached_params)
         grad = torch.cat([p.grad.flatten() for p in mod.parameters() if p.requires_grad])
