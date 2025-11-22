@@ -229,3 +229,78 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, tx
     ax.spines[['top', 'right', 'bottom']].set_visible(False)
     
     return fig
+
+def plot_full_connectivity_tree_style(nodes_csv, edges_csv, fig=None, txt_pads=(0.1, 0.1), **kwargs):
+    """
+    Plots a full connectivity graph with critical points as nodes,
+    styled similarly to the saddle tree plot layout.
+    Nodes are ordered by type (saddles first, then minima) and spaced along x by index.
+    Vertical axis is f_value.
+    """
+
+    # Load CSVs
+    nodes_df = pd.read_csv(nodes_csv)
+    edges_df = pd.read_csv(edges_csv)
+
+    # Create an artificial "order" for plotting: saddles first, then minima
+    saddles_df = nodes_df[nodes_df["type"] == "saddle"].copy()
+    minima_df = nodes_df[nodes_df["type"] == "minimum"].copy()
+
+    saddles_df["order"] = range(len(saddles_df))
+    minima_df["order"] = range(len(saddles_df), len(saddles_df) + len(minima_df))
+
+    nodes_df = pd.concat([saddles_df, minima_df])
+    # nodes_df.set_index("index", inplace=True)
+
+    # Plot setup
+    if fig is None:
+        fig, ax = plt.subplots(figsize=(12, 8))
+    else:
+        ax = fig.gca()
+
+    x_pos = nodes_df["order"].to_dict()
+    y_val = nodes_df["f_value"].to_dict()
+    yrange = nodes_df["f_value"].max() - nodes_df["f_value"].min()
+
+    markersize = kwargs.get("markersize", 50)
+    fontsize = kwargs.get("fontsize", 8)
+    edge_color = kwargs.get("edge_color", "gray")
+    saddle_color = kwargs.get("saddle_color", "red")
+    minima_color = kwargs.get("minima_color", "blue")
+    text_color = kwargs.get("text_color", "black")
+    padx, pady = txt_pads
+
+    # Plot edges
+    for _, row in edges_df.iterrows():
+        i, j = row["index_1"], row["index_2"]
+        if i in x_pos and j in x_pos:
+            x1, y1 = x_pos[i] * 2, y_val[i]
+            x2, y2 = x_pos[j] * 2, y_val[j]
+            ax.plot([x1, x2], [y1, y2], color=edge_color, lw=1)
+
+    # Plot nodes
+    saddle_label_added = False
+    minima_label_added = False
+    for idx in x_pos:
+        x = x_pos[idx] * 2
+        y = y_val[idx]
+        point_type = nodes_df.loc[idx, "type"].lower()
+
+        if point_type == "saddle":
+            ax.scatter(x, y, color=saddle_color, edgecolor=edge_color, s=markersize, zorder=3,
+                       label="Saddle" if not saddle_label_added else "")
+            ax.text(x + padx, y + pady, f"S{idx}", ha="center", va="center", fontsize=fontsize, color=text_color)
+            saddle_label_added = True
+        elif point_type == "minimum":
+            ax.scatter(x, y, color=minima_color, edgecolor=edge_color, s=markersize, zorder=3,
+                       label="Minima" if not minima_label_added else "")
+            ax.text(x, y - pady, f"M{idx}", ha="center", va="center", fontsize=fontsize, color=text_color)
+            minima_label_added = True
+
+    ax.set_title("Full Connectivity Graph (Tree Layout Style)")
+    ax.grid(True, linestyle="--", alpha=0.4, axis='y')
+    ax.set_xticks([])
+    ax.spines[['top', 'right', 'bottom']].set_visible(False)
+    ax.legend()
+
+    return fig
