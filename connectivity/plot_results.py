@@ -122,8 +122,8 @@ def plot_results_with_paths_3d(func, critical_points_csv,
         crit_df = pd.read_csv(critical_points_csv)
         conn_df = pd.read_csv(saddle_to_minima_csv)
 
-        saddle_indices = conn_df['index_saddle'].unique()
-        minima_indices = conn_df['index_minimum'].unique()
+        saddle_indices = conn_df['index_1'].unique()
+        minima_indices = conn_df['index_2'].unique()
 
         # Plot minima
         for i in minima_indices:
@@ -143,8 +143,8 @@ def plot_results_with_paths_3d(func, critical_points_csv,
 
         # Plot descent paths
         for _, row in conn_df.iterrows():
-            s_row = crit_df.iloc[int(row['index_saddle'])]
-            m_row = crit_df.iloc[int(row['index_minimum'])]
+            s_row = crit_df.iloc[int(row['index_1'])]
+            m_row = crit_df.iloc[int(row['index_2'])]
 
             s_coords = [s_row[col] for col in sorted(s_row.index) if col.startswith("x")]
             m_coords = [m_row[col] for col in sorted(m_row.index) if col.startswith("x")]
@@ -238,6 +238,7 @@ def plot_full_connectivity_tree_style(nodes_csv, edges_csv, fig=None, txt_pads=(
     Vertical axis is f_value.
     """
 
+    
     # Load CSVs
     nodes_df = pd.read_csv(nodes_csv)
     edges_df = pd.read_csv(edges_csv)

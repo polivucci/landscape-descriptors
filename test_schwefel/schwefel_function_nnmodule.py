@@ -76,3 +76,19 @@ def schwefel2D_numpy(*x):
     coords = model([])                        # get parameters [x1, x2]
     loss = _schwefel(*coords)                 # evaluate Schwefel loss
     return float(loss.item())               # return scalar for NumPy
+
+def schwefel3D_numpy(*x):
+    # combined nnmodule+schwefel loss machinery
+    x = [torch.tensor(xi) for xi in x]
+    model = Schwefel3D(*x)
+    coords = model([])                        # get parameters [x1, x2]
+    loss = _schwefel(*coords)                 # evaluate Schwefel loss
+    return float(loss.item())               # return scalar for NumPy
+
+def schwefel4D_numpy(*x):
+    # combined nnmodule+schwefel loss machinery
+    x = [torch.tensor(xi) for xi in x]
+    model = Schwefel4D(*x)
+    coords = model([])                        # get parameters [x1, x2]
+    loss = _schwefel(*coords)                 # evaluate Schwefel loss
+    return float(loss.item())               # return scalar for NumPy
