@@ -3,7 +3,7 @@ from torch.quasirandom import SobolEngine
 from scipy.spatial import KDTree
 import pandas as pd
 from memory_profiler import profile
-
+import os
 torch.set_default_dtype(torch.float64)
 
 class TorchMinimaFinder:
@@ -51,9 +51,10 @@ class TorchMinimaFinder:
             self.update_kdtree()
         distances, indices = self.kdtree.query([point], k=1)
         if distances[0] < self.min_distance:
+            print(f"Point {point} is too close to existing minimum at {self.minima[indices[0]][0]} (distance {distances[0]:.6f} < {self.min_distance})")
             idx = indices[0]
             self.minima_counts[idx] += 1      # Increment count for this minimum
-            self.total_converged += 1         # Increment total converged
+            self.total_converged += 1         # Increment total converged            
             return True
         return False
     
@@ -66,14 +67,17 @@ class TorchMinimaFinder:
 
     def add_minimum(self, point, value):
         point_np = point.detach().cpu().numpy()
-        print("Reject:", self._is_too_close(point_np) or bool(self._is_out_bounds(point)))
         if self._is_out_bounds(point):
+            print(f"Point {point_np} is out of bounds {self.bounds.numpy()}. Rejecting.")
             return False
         if self._is_too_close(point_np):
+            print(f"Point {point_np} is too close to existing minimum. Rejecting.")
             return False
-        if not self._is_too_close(point_np):
+        else:
+            print(f"New minimum found at {point_np} with value {value:.6f}")
             self.minima.append((point_np, value))
             self.minima_counts.append(1)
+            self.total_converged += 1
             self.update_kdtree()
             return True
         return False
@@ -88,13 +92,18 @@ class TorchMinimaFinder:
         for _, row in df.iterrows():
             coords = [row[f'x{i+1}'] for i in range(self.dimension)]
             value = row['f_value']
-            point = torch.tensor(coords, dtype=torch.float32, device=self.device)
-            if not self._is_out_bounds(point) and not self._is_too_close(point.cpu().numpy()):
+            point = torch.tensor(coords, dtype=torch.get_default_dtype(), device=self.device).cpu().numpy()
+            # if not self._is_out_bounds(point) and not self._is_too_close(point.cpu().numpy()):
+            #     self.minima.append((point, value))
+            #     # self.minima_counts.append(0)
+            #     self.minima_counts.append(0)  # Assume each loaded minimum has been found once
+            if (not self._is_out_bounds(torch.tensor(coords, device=self.device))) and (not self._is_too_close(point)):
                 self.minima.append((point, value))
-                self.minima_counts.append(0)
+                # self.minima_counts.append(0)
                 loaded += 1
+            # loaded += 1
         self.update_kdtree()
-        print(f"Loaded {loaded} valid minima from dataframe.")
+        print(f"Loaded {loaded} valid points from dataframe.")
 
     def get_basin_stats(self):
         """
@@ -157,6 +166,21 @@ def construct_SquaredGradModel(base_model_class, base_loss):
             # return torch.log10(sum(grad2))
 
     return SquaredGradModel
+def save_basin_counts_csv(finder, filename="basin_counts.csv", out_dir="."):
+    rows = []
+    for i, ((pt, fval), count) in enumerate(zip(finder.minima, finder.minima_counts)):
+        # pt is numpy array (x1, x2, ...)
+        row = {"min_id": i, "count": int(count), "f_value": float(fval)}
+        for d in range(len(pt)):
+            row[f"x{d+1}"] = float(pt[d])
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, filename)
+    df.to_csv(path, index=False)
+    print(f"Saved basin counts to: {path}")
+    return df
 
 # ---- Main search ----
 from memory_profiler import profile
@@ -208,6 +232,7 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
         # print('params_dict', params_dict)
         y = torch.func.functional_call(mod0, params_dict, (input,), strict=True)
         return loss_func(y)
+    
 
     for i, x0 in enumerate(finder.x0s):
         # if (i+1)!=325: continue
@@ -245,7 +270,15 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
         critical=False
         # check grad is small and final_point is new
         gradtol = 1e-5 or optimizer_kwargs['gradtol']
-        if torch.norm(grad)<gradtol: critical = finder.add_minimum(final_point, final_val.item()) 
+        print(torch.norm(grad))
+        if minima_only:
+            if torch.norm(grad)>gradtol:             
+                print(f"Converged to critical point with ||grad||={torch.norm(grad):.2e} < {gradtol}")          
+                critical = finder.add_minimum(final_point, final_val.item()) 
+        else:
+            if torch.norm(grad)<gradtol:             
+                print(f"Converged to critical point with ||grad||={torch.norm(grad):.2e} < {gradtol}")          
+                critical = finder.add_minimum(final_point, final_val.item()) 
         
         # Classify critical point
         if critical:
@@ -264,7 +297,7 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
             else:
                 saddles.append((final_point, final_val, index))
                 print("Type: saddle")
-
+           
     # for point, value in finder.minima:
     #     point_t = torch.tensor(point, requires_grad=True)
     #     # y = model_builder(point_t)(input).to(device)
@@ -284,8 +317,21 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
     #     else:
     #         saddles.append((point, value, index))
     #         print("saddle", point)
+    if minima_only==True:
+        print("\n=== Basin Stats ===")
+        basin_stats, total_converged = finder.get_basin_stats()
+        print(f"Total new distinct minima found: {len(basin_stats)}")
+        print(f"Total converged attempts (including duplicates): {finder.minima_counts}")
+        print(f"Converged to existing basin (duplicates): {total_converged}")
+        print("Convergence count per minimum:")
+        for (point, _), count in zip(finder.minima, finder.minima_counts):
+            print(f"Min at {point} was hit {count} times")
+            print(f"Total converged attempts: {finder.total_converged}")
+
+        save_basin_counts_csv(finder, filename="basin_counts.csv", out_dir=".")
 
     return minima, maxima, saddles
+
 
 # ---- CSV Writer ----
 def save_critical_points_to_csv(minima: torch.Tensor, maxima: torch.Tensor, saddles: torch.Tensor, dimension=2, filename="critical_points_torch.csv"):
