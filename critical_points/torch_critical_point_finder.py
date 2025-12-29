@@ -12,22 +12,28 @@ class TorchMinimaFinder:
         if isinstance(bounds, dict): bounds = tuple(bounds.values())
         assert len(bounds)==dimension
         self.bounds = torch.as_tensor(bounds, device=device, dtype=torch.get_default_dtype())
+        print(self.bounds)
         self.low_bounds, self.upp_bounds = self.bounds[:,0], self.bounds[:,1]
         self.ranges = self.upp_bounds - self.low_bounds
         
         self.dimension = dimension
         self.min_distance = min_distance
-        self.m = m
         self.minima = []
         self.attempt_history = []
         self.kdtree = None
         self.kdtree_x0s = None
         self.device = device
         self.seed = seed
-        self.generate_starting_points()
 
         self.minima_counts = []
         self.total_converged = 0
+
+        if isinstance(m, torch.Tensor):
+            self.x0s = m
+            self.m = m.shape[0]
+        else:
+            self.m = m
+            self.generate_starting_points()
 
     def generate_starting_points(self):
         sampler = SobolEngine(dimension=self.dimension, scramble=True, seed=self.seed)
@@ -56,7 +62,7 @@ class TorchMinimaFinder:
             self.total_converged += 1         # Increment total converged
             return True
         return False
-    
+
     def _is_out_bounds(self, point, tolerance=1e-6):
         """
         Check if point is outside the defined bounds (with optional tolerance).
@@ -66,10 +72,11 @@ class TorchMinimaFinder:
 
     def add_minimum(self, point, value):
         point_np = point.detach().cpu().numpy()
-        print("Reject:", self._is_too_close(point_np) or bool(self._is_out_bounds(point)))
         if self._is_out_bounds(point):
+            print("Reject: out of bounds")
             return False
         if self._is_too_close(point_np):
+            print("Reject: too close")
             return False
         if not self._is_too_close(point_np):
             self.minima.append((point_np, value))
@@ -94,7 +101,7 @@ class TorchMinimaFinder:
                 self.minima_counts.append(0)
                 loaded += 1
         self.update_kdtree()
-        print(f"Loaded {loaded} valid minima from dataframe.")
+        print(f"Loaded {loaded} valid critical points from dataframe.")
 
     def get_basin_stats(self):
         """
@@ -103,15 +110,15 @@ class TorchMinimaFinder:
         return list(zip(self.minima, self.minima_counts)), self.total_converged
 
 # Torch gradient descent
-from critical_points.optimizers import optimize_lbfgs, optimize_newton
+from critical_points.optimizers import optimize_lbfgs, optimize_newton, optimize_gd
 def run_local_search(optimizer, model, input, loss_fn, **optimizer_kwargs):
-    _, final_val, path = optimizer(model, input, loss_fn, **optimizer_kwargs)
+    _, final_val, path, conv = optimizer(model, input, loss_fn, **optimizer_kwargs)
     # try: 
     #     if optimizer_kwargs['log_paths']: print(pd.DataFrame(path).tail(10))
     # except: 
     #     pass
     fin_point = torch.nn.utils.parameters_to_vector(model.parameters()).detach()
-    return fin_point, final_val, path
+    return fin_point, final_val, path, conv
 
 def flatten_hessian_blocks(H):
     """Written by ChatGPT.
@@ -127,11 +134,11 @@ def flatten_hessian_blocks(H):
         rows.append(torch.cat(row_blocks, dim=1))
     return torch.cat(rows, dim=0)
 
-# Critical point index using Hessian
-def _torch_critical_point_index(hessian, tol=1e-9):
-    """Computes the index of a critical point.
+def _torch_critical_point_index(hessian, tol=1e-6):
+    """Computes the index of a critical point (number of negative Hessian eigenvalues).
     """
     eigvals = torch.linalg.eigvalsh(hessian)
+    print('eigvals H:', eigvals)
     if ((eigvals > -tol) & (eigvals < tol)).any():
         return -1  # near-zero eigenvalue
     return int((eigvals < -tol).sum().item())
@@ -167,7 +174,7 @@ def comp_hessian(func, params):
 # @profile
 def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_only=False, dimension=2,
                                num_attempts=64, min_distance=0.01, seed=42,
-                               device="cpu",resume_df=None, **optimizer_kwargs):
+                               device="cpu",resume_df=None, outfile=None, skip_points=None, gradtol=1e-5, **optimizer_kwargs):
     """
     Finds critical points using torch autograd + NNModule
     """
@@ -176,24 +183,37 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
         finder.load_from_dataframe(resume_df)
         print(f"Resuming with {len(finder.minima)} loaded points.")
 
+    optimizer_kwargs['gradtol']=gradtol
+
     optimizer=optimize_newton
-    if minima_only: optimizer=optimize_lbfgs
-    optimizer_kwargs['bounds'] = {'low': finder.low_bounds, 'up': finder.upp_bounds}
+    if minima_only=='lbfgs': optimizer=optimize_lbfgs
+    if minima_only=='gd': optimizer=optimize_gd
+    # if minima_only: optimizer=optimize_gd
+    # optimizer_kwargs['bounds'] = {'low': finder.low_bounds, 'up': finder.upp_bounds}
 
     minima, maxima, saddles = [], [], []
+    not_converged = []
 
     mod0 = model_builder(finder.x0s[0])
-    model_class = type(mod0)
+
+    # model_class = type(mod0)
     active_params_named =  {k: True if v.requires_grad else False for k, v in mod0.named_parameters()}
     active_params = list(active_params_named.values())
     active_params_names = [k for k, v in active_params_named.items() if v]
     
     # for the optimizer, sort bounds based on model internal order:
-    low_bounds = torch.tensor([bounds[k][0] for k in active_params_names])
-    upp_bounds = torch.tensor([bounds[k][1] for k in active_params_names])
+    if bounds==(0.,1.):
+        low_bounds = torch.tensor([0.0 for _ in active_params_names])
+        upp_bounds = torch.tensor([1.0 for _ in active_params_names])
+    else:
+        low_bounds = torch.tensor([bounds[k][0] for k in active_params_names])
+        upp_bounds = torch.tensor([bounds[k][1] for k in active_params_names])
+
+    # optimizer_kwargs['bounds'] = None
     optimizer_kwargs['bounds'] = {'low': low_bounds, 'up': upp_bounds}
+    print(optimizer_kwargs['bounds'])
     
-    sqgrad_class = construct_SquaredGradModel(model_class, loss_func)
+    # sqgrad_class = construct_SquaredGradModel(model_class, loss_func)
     
     _, unflatten = torch.utils._pytree.tree_flatten(dict(mod0.named_parameters()))
     
@@ -205,12 +225,14 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
         """
         # print('flat_params', flat_params)
         params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) # see ChatGPT convo
+        buffers_dict = dict(mod0.named_buffers())
         # print('params_dict', params_dict)
-        y = torch.func.functional_call(mod0, params_dict, (input,), strict=True)
+        y = torch.func.functional_call(mod0, {**params_dict, **buffers_dict}, (input,), strict=True)
         return loss_func(y)
 
     for i, x0 in enumerate(finder.x0s):
-        # if (i+1)!=325: continue
+        if skip_points is not None and skip_points(i): continue
+
         print()
         print('__________________________________________________________________________________________')
         print(f"Attempt {i+1}/{finder.m}:")
@@ -231,20 +253,22 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
         # grad = torch.sqrt(final_val_sqgrad)
 
         # algorithm 2: uncorrected newton's method:
-        final_point, final_val, path = run_local_search(optimizer, mod, input, loss_func, **optimizer_kwargs)
+        final_point, final_val, path, conv = run_local_search(optimizer, mod, input, loss_func,**optimizer_kwargs)
         detached_params = {k: v.detach() for k, v in mod.named_parameters()} # detach to avoid memory blow up
         final_params, _ = torch.utils._pytree.tree_flatten(detached_params)
         grad = torch.cat([p.grad.flatten() for p in mod.parameters() if p.requires_grad])
 
+        if conv==False: not_converged.append(i)
+
         # filter active parameters
-        final_point = final_point[active_params]
+        # final_point = final_point[active_params]
+        final_point = torch.tensor([detached_params[name] for name in active_params_names])
         final_val = eval_loss_fn_params(final_params)
         print(f"Arrival point: {final_point.cpu().numpy()}")
         print('check grad:', grad)
-        final_point = torch.tensor([detached_params[name] for name in active_params_names])
+        print('check grad norm:', torch.norm(grad))
         critical=False
         # check grad is small and final_point is new
-        gradtol = 1e-5 or optimizer_kwargs['gradtol']
         if torch.norm(grad)<gradtol: critical = finder.add_minimum(final_point, final_val.item()) 
         
         # Classify critical point
@@ -264,6 +288,9 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
             else:
                 saddles.append((final_point, final_val, index))
                 print("Type: saddle")
+
+            if outfile is None: outfile='./critical_points.csv'
+            results_df = save_critical_points_to_csv(minima, maxima, saddles, dimension=finder.dimension, filename=outfile)
 
     # for point, value in finder.minima:
     #     point_t = torch.tensor(point, requires_grad=True)
@@ -285,7 +312,9 @@ def find_critical_points_torch(model_builder, loss_func, input, bounds, minima_o
     #         saddles.append((point, value, index))
     #         print("saddle", point)
 
-    return minima, maxima, saddles
+    print('These points failed to converge:', not_converged)
+
+    return results_df
 
 # ---- CSV Writer ----
 def save_critical_points_to_csv(minima: torch.Tensor, maxima: torch.Tensor, saddles: torch.Tensor, dimension=2, filename="critical_points_torch.csv"):
@@ -293,9 +322,9 @@ def save_critical_points_to_csv(minima: torch.Tensor, maxima: torch.Tensor, sadd
     for point_type, points in zip(["minimum", "maximum", "saddle"], [minima, maxima, saddles]):
         for p, fval, index in points:
             vardict = {f"x{i+1}": p[i].item() for i in range(dimension)}
-            data.append({**vardict, "f_value": fval.item(), "type": point_type, "index": index})
+            data.append({**vardict, "f_value": fval.item(), "type": point_type, "cp_index": index})
 
     df = pd.DataFrame(data)
-    df.to_csv(filename, float_format="%.10f")
+    df.to_csv(filename, float_format="%.10f", mode='w')
     print(f"Saved {filename}")
     return df

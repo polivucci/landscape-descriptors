@@ -228,18 +228,29 @@ def compute_mst(weight_matrix):
     mst_sparse = minimum_spanning_tree(weight_matrix)
     return np.array(mst_sparse.nonzero()).T
 
-def dfs_layout(tree_adj, node, unique_minima, f_values, visited, x_pos, counter, parent=None):
-    visited.add(node)
-    # print(visited)
-    children = [n for n in tree_adj[node] if n != parent]
-    if node in unique_minima:
-        x_pos[node] = counter[0]
-        counter[0] += 1
-        return x_pos[node]
-    child_xs = [dfs_layout(tree_adj, child, unique_minima, f_values, visited, x_pos, counter, node) for child in children]
-    x_pos[node] = sum(child_xs) / len(child_xs) if child_xs else counter[0]
-    return x_pos[node]
+# def dfs_layout(tree_adj, node, unique_minima, f_values, visited, x_pos, counter, parent=None):
+#     visited.add(node)
+#     # print(visited)
+#     children = [n for n in tree_adj[node] if n != parent]
+#     if node in unique_minima:
+#         x_pos[node] = counter[0]
+#         counter[0] += 1
+#         return x_pos[node]
+#     child_xs = [dfs_layout(tree_adj, child, unique_minima, f_values, visited, x_pos, counter, node) for child in children]
+#     x_pos[node] = sum(child_xs) / len(child_xs) if child_xs else counter[0]
+#     return x_pos[node]
 
+# def bfs_layout(tree_adj, node, unique_minima, f_values, visited, x_pos, counter, parent=None):
+#     visited.add(node)
+#     # print(visited)
+#     children = [n for n in tree_adj[node] if n != parent]
+#     if node in unique_minima:
+#         x_pos[node] = counter[0]
+#         counter[0] += 1
+#         return x_pos[node]
+#     child_xs = [bfs_layout(tree_adj, child, unique_minima, f_values, visited, x_pos, counter, node) for child in children]
+#     x_pos[node] = sum(child_xs) / len(child_xs) if child_xs else counter[0]
+#     return x_pos[node]
 
 def spread_x_positions(x_pos, min_sep=0.3):
     # Prevent exact overlaps by nudging x positions
@@ -279,6 +290,35 @@ def dfs_order(mst_edges, node_count, root_id, all_values, ids):
 
     return order    # list of node indices in DFS order
 
+def bfs_order(mst_edges, node_count, root_id, all_values, ids):
+    tree = defaultdict(set)
+    for u, v in mst_edges:
+        tree[u].add(v)
+        tree[v].add(u)
+    
+    for u in tree.keys():
+        tree[u] = sorted(tree[u], key=lambda n: all_values[n])
+
+    visited = [False] * node_count
+    appended = [False] * node_count
+    order = []
+
+    def bfs(node):
+        order.append(node)
+        visited[node] = True
+        appended[node] = True
+        for neighbor in tree[node]:
+            if not appended[neighbor]:
+                order.append(neighbor)
+        for neighbor in tree[node]:
+                bfs(neighbor)
+
+    root_pos = ids.index(root_id)
+    node = root_pos
+    bfs(node)       # start from first node
+
+    return order    # list of node indices in DFS order
+
 def map_coords_to_indices(critical_points_df):
     x_cols = sorted([col for col in critical_points_df.columns if col.startswith("x")])
 
@@ -315,13 +355,12 @@ def map_coords_to_indices(critical_points_df):
     return all_nodes, all_values, all_types, index_map
 
 def save_tree_nodes_csv(
-    all_nodes, index_map, saddle_y_values:dict, minima_y_values:dict, dfs_order_list, out_dir='./'
+    index_map, all_values, dfs_order_list, out_dir='./'
 ):
     output_file=out_dir+"tree_nodes.csv"
     rows = []
     for order_idx, internal_idx in enumerate(dfs_order_list):
-        coord = all_nodes[internal_idx]
-        f_val = saddle_y_values.get(coord, minima_y_values.get(coord))
+        f_val = all_values[internal_idx]
         rows.append((index_map[internal_idx], f_val, order_idx))
 
     df = pd.DataFrame(rows, columns=["index", "f_value", "order"])
@@ -370,12 +409,13 @@ def prune_graph(values, ids, edges, types, root_id):
             neighbors = [j for j in adj[i] if j in keep]
             
             if node_type == type1:
-                continue  # always keep
+                continue  # always keep minima
             
             if ids[i] == max_type2:
-                continue  # always keep
+                continue  # always keep the root node
             
-            # Rule 1
+            # Rule 1: remove saddles that have at most 2 neighbours, of which at least one is 
+            # another saddle
             if len(neighbors) <= 2 and any(types[j] == type2 for j in neighbors):
                 keep.remove(i)
                 changed = True
@@ -396,14 +436,15 @@ def prune_graph(values, ids, edges, types, root_id):
                 adj = build_adj(edges)
                 continue
 
-            # Rule 2: more than one higher-value neighbor
-            higher_neighbors = [j for j in neighbors if values[j] >= values[i]]
-            if len(higher_neighbors) > 1:
-                keep.remove(i)
+            # Rule 2 (weak): remove saddles that have one or more equal-value neighbours and 
+            # rewire to the equal-value neighbour (gets rid of equal value saddles)
+            equal_neighbors = [j for j in neighbors if values[j] == values[i]]
+            if len(equal_neighbors) >= 1:
+                keep.remove(i) # remove node
                 changed = True
                 
-                # Connect all neighbors to the highest-value neighbor
-                best_neighbor = max(higher_neighbors, key=lambda j: values[j])
+                # Connect all neighbors to the first equal-value neighbor
+                best_neighbor = equal_neighbors[0]
                 for nb in neighbors:
                     if nb != best_neighbor:
                         edges.add(tuple(sorted((best_neighbor, nb))))
@@ -411,6 +452,25 @@ def prune_graph(values, ids, edges, types, root_id):
                 edges = {e for e in edges if i not in e}
                 adj = build_adj(edges)
                 continue
+            
+            # DO NOT USE, DOES NOT GIVE CORRECT TOPOLOGY:
+            # # Rule 2 (strong): remove saddles that have more than one higher- or equal-value 
+            # # neighbour and rewire the neighbours to the highest neighbour 
+            # # (gets rid of equal value saddles AND saddles that only have saddle children) 
+            # higher_neighbors = [j for j in neighbors if values[j] >= values[i]]
+            # if len(higher_neighbors) > 1:
+            #     keep.remove(i)  # remove node
+            #     changed = True
+                
+            #     # Connect all neighbors to the highest-value neighbor
+            #     best_neighbor = max(higher_neighbors, key=lambda j: values[j])
+            #     for nb in neighbors:
+            #         if nb != best_neighbor:
+            #             edges.add(tuple(sorted((best_neighbor, nb))))
+                
+            #     edges = {e for e in edges if i not in e}
+            #     adj = build_adj(edges)
+            #     continue
     
     pruned_values = [values[i] for i in keep]
     pruned_types = [types[i] for i in keep]

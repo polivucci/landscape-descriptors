@@ -1,14 +1,15 @@
 import torch
-from torch.optim import LBFGS
+from torch.optim import LBFGS, SGD
 from torch.nn.utils import parameters_to_vector
 
+torch.set_printoptions(precision=7, sci_mode=True)
 
-def optimize_lbfgs(model, input, loss_fn, lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5, log_paths=False, bounds=None):
+def optimize_lbfgs(model, input, loss_fn, lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5, gradtol=1e-5, log_paths=False, bounds=None, **kwargs):
     """
     Optimize using PyTorch's LBFGS to find local minimum.
     """
 
-    optimizer = LBFGS(model.parameters(), lr=lr, max_iter=max_iter, line_search_fn="strong_wolfe")
+    optimizer = LBFGS(model.parameters(), lr=lr, max_iter=max_iter, tolerance_grad=gradtol, **kwargs)
 
     trajectory = []  # Start with initial point 
 
@@ -23,29 +24,34 @@ def optimize_lbfgs(model, input, loss_fn, lr=1e-3, max_iter=100, atol=1e-6, rtol
 
     active = [True if p.requires_grad else False for p in model.parameters()]
     prev_coords = parameters_to_vector(model.parameters()).detach() # initial coords
+    conv = False; oob=False
     for it in range(max_iter):
         loss = optimizer.step(closure)
 
         coords = parameters_to_vector(model.parameters()).clone().detach()
 
         # stopping criterion
-        # grad = torch.cat([p.grad.flatten() for p in model.parameters() if p.requires_grad])
-        # small_grad = torch.norm(grad) < rtol
-        # if small_grad or close:
-        try:
-            # assert small_grad
-            torch.testing.assert_close(
-                coords, prev_coords, atol=atol, rtol=rtol
-            )
-            # if assert passes, break
+        grad = torch.cat([p.grad.flatten() for p in model.parameters() if p.requires_grad])
+        small_grad = torch.norm(grad) < gradtol
+        if small_grad: 
+            conv=True
             break
-        except AssertionError:
-            pass
+
+        # try:
+        #     # assert small_grad
+        #     torch.testing.assert_close(
+        #         coords, prev_coords, atol=atol, rtol=rtol
+        #     )
+        #     # if assert passes, break
+        #     break
+        # except AssertionError:
+        #     pass
 
         # bound check
         if bounds is not None:
             if torch.any(coords[active] < bounds['low']) or torch.any(coords[active] > bounds['up']): 
                 # print('out of bounds', coords[active])
+                oob = True
                 conv = True
                 print(f"Out of bounds at {it} iterations.")
                 break
@@ -55,25 +61,41 @@ def optimize_lbfgs(model, input, loss_fn, lr=1e-3, max_iter=100, atol=1e-6, rtol
         #     p.grad = None
 
         prev_coords = coords
+    
+    if not conv and not oob: print(f"Failed to converge. Max iterations exceeded.")
+    if conv and oob: conv='oob'
+    
+    print('last grad norm', torch.norm(grad))
 
-    return model, loss, trajectory  # Return both final point and path
+    return model, loss, trajectory, conv  # Return both final point and path
 
 
-def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_paths=False, bounds=None):
+def optimize_newton(model, 
+                    input, 
+                    loss_fn, 
+                    lr=1e-3, gradtol=1e-5, max_iter=50, 
+                    bounds=None,
+                    log_paths=False, 
+                    log_grad=False
+                    ):
     """
-    Converge to a critical point (grad(loss_fn) = 0) of the loss function with respect to model parameters
-    using Newton's method with no additional modification to make the Hessian positive definite.
+    Converge to a critical point (grad(loss_fn) = 0) of the loss function using Newton's method with 
+    no modification to make the Hessian positive definite. 
     """
+    
+    tol = gradtol
+    
     # Flatten model parameters into a single vector for Hessian computation
     trajectory = []  # for optional log trajectory
     
     lr0 = lr
     conv = False; oob=False
-    while conv==False and oob==False and lr>=lr0*1e-3: # simple adaptive learning rate
+    while conv==False and oob==False and lr>=lr0:#*1e-4: # simple adaptive learning rate
         params = [p for p in model.parameters() if p.requires_grad]
         prev_coords = parameters_to_vector(params).clone().detach()
         print('learning rate', lr)
         # print('x0', prev_coords)
+
         for it in range(max_iter):
             # Prev gradients to zero
             model.zero_grad()
@@ -116,9 +138,12 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
             # close = torch.allclose(
             #         coords, prev_coords, atol=1e-6, rtol=1e-5
             #     )
-            small_grad = torch.norm(grad) < tol
+            grad_norm = torch.norm(grad)
+            if log_grad and it%log_grad==0: 
+                print('gradnorm', grad_norm.item(), 'coords', coords)
+
             # if small_grad or close:
-            if small_grad:
+            if grad_norm < tol:
                 conv = True
                 print(f"Converged after {it} iterations.")
                 break
@@ -127,22 +152,99 @@ def optimize_newton(model, input, loss_fn, lr=1e-3, tol=1e-5, max_iter=50, log_p
                 if torch.any(coords < bounds['low']) or torch.any(coords > bounds['up']): 
                     # print('out of bounds', coords, bounds)
                     oob = True
+                    conv = True
                     print(f"Out of bounds at {it} iterations.")
                     break
 
-            coords = prev_coords
+            # prev_coords = coords 
         
         # print(trajectory[0])
         # print(trajectory[-1:])
 
         # if failure to converge, decimate learning rate
-        lr *= 0.1
+        print('partial grad', grad)
+        print('partial point', coords)
+        lr *= 0.01
+        # lr *= 10.0
         # max_iter *= 10
 
-    if not conv and not oob: print(f"Failed to converge.")
+    if not conv and not oob: print(f"Failed to converge. Max iterations exceeded.")
+    if conv and oob: conv='oob'
 
     # load gradients into the model
     for p, g in zip(params, grad1):
         p.grad = g
 
-    return model, loss, trajectory
+    return model, loss, trajectory, conv
+
+
+def optimize_gd(model, 
+                input, 
+                loss_fn, 
+                lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5, gradtol=1e-5, 
+                log_paths=False, 
+                log_grad=False,
+                bounds=None, **kwargs):
+    """
+    Optimize using PyTorch's GD to find local minimum.
+    """
+
+    optimizer = SGD(model.parameters(), lr=lr)
+
+    trajectory = []  # Start with initial point 
+
+    def closure(): #Closure required because LBFGS evaluates the function multiple times during each iteration.
+            optimizer.zero_grad()
+            y = model(input)
+            loss = loss_fn(y)
+            loss.backward()
+            if log_paths: # optional, appends each trajectory point 
+                trajectory.append((parameters_to_vector(model.parameters()).clone().detach(), loss.item())) 
+            return loss
+
+    active = [True if p.requires_grad else False for p in model.parameters()]
+    prev_coords = parameters_to_vector(model.parameters()).detach() # initial coords
+    conv = False; oob=False
+    for it in range(max_iter):
+        loss = optimizer.step(closure)
+
+        coords = parameters_to_vector(model.parameters()).clone().detach()
+
+        grad = torch.cat([p.grad.flatten() for p in model.parameters() if p.requires_grad])
+
+        # stopping criterion
+        grad_norm = torch.norm(grad)
+        if log_grad and it%log_grad==0: 
+            print('gradnorm', grad_norm.item(), 'coords', coords[active])
+
+        if grad_norm < gradtol: 
+            conv=True
+            break
+
+        # try:
+        #     # assert small_grad
+        #     torch.testing.assert_close(
+        #         coords, prev_coords, atol=atol, rtol=rtol
+        #     )
+        #     # if assert passes, break
+        #     break
+        # except AssertionError:
+        #     pass
+
+        # bound check
+        if bounds is not None:
+            if torch.any(coords[active] < bounds['low']) or torch.any(coords[active] > bounds['up']): 
+                # print('out of bounds', coords[active])
+                oob = True
+                conv = True
+                print(f"Out of bounds at {it} iterations.")
+                break
+
+        prev_coords = coords
+    
+    if not conv and not oob: print(f"Failed to converge. Max iterations exceeded.")
+    if conv and oob: conv='oob'
+
+    print('last grad norm', torch.norm(grad))
+
+    return model, loss, trajectory, conv  # Return both final point and path
