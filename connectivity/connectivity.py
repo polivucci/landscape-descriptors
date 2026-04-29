@@ -5,32 +5,9 @@ from numpy.linalg import norm as numpynorm
 from numpy import float64 as numpyfloat64
 import pandas as pd
 
-from critical_points.optimizers import optimize_lbfgs
-from critical_points.torch_critical_point_finder import run_local_search
+from critical_points.jax_optimizers import optimize_lbfgs
+from critical_points.jax_critical_point_finder import run_local_search
 
-torch.set_default_dtype(torch.float64)
-
-from critical_points.torch_critical_point_finder import flatten_hessian_blocks
-def compute_model_hessian(model, input, loss_func):
-
-    active_params = [True if p.requires_grad else False for p in model.parameters()]
-    params_flatten, unflatten = torch.utils._pytree.tree_flatten(dict(model.named_parameters()))
-
-    def eval_loss_fn_params(flat_params):
-        """Defines the functional eval of the model given the parameters.
-        Flatten is required for torch.func.hessian to return a 2-tensor and not a nested dict,
-        as function like torch.func.hessian from torch.func expect a single input tensor or PyTree (nested dict) of tensors.
-        and functional calls work with nested dicts (i.e. unflattened).
-        """
-        params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) # see ChatGPT convo
-        y = torch.func.functional_call(model, params_dict, (input,))
-        return loss_func(y)
-
-    hessian = torch.func.hessian(eval_loss_fn_params)(params_flatten)
-    hessian = flatten_hessian_blocks(hessian)
-    hessian = hessian[active_params][:, active_params]
-    
-    return hessian
 
 def offset_near_saddle(saddle_point, model_saddle, input, loss_func, epsilon=0.01):
     """
