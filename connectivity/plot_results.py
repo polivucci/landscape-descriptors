@@ -170,22 +170,28 @@ def plot_results_with_paths_3d(func, critical_points_csv,
     # # for h in slice_indices:
     # #     cs = ax.contourf(yy[h], zz[h], f_vals[h], zdir='x', offset=x[h], alpha=0.5, cmap='viridis')
 
-def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, txt_pads=(0.1, 0.1), **kwargs):
+def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, 
+                                   minus_y_axis=False, 
+                                   txt_pads=(0.1, 0.1), markersize=50, fontsize=8):
 
     # Read node and edge data
     nodes_df = pd.read_csv(nodes_csv)
     edges_df = pd.read_csv(edges_csv)
-    
+
     # --- Plotting ---
     if fig is None:
         fig, ax = plt.subplots(figsize=(12, 8))
     else:
         ax = fig.gca()
 
+    # invert y axis
+    mn = 1.0
+    if minus_y_axis: mn = -1.0
+
     x_pos = dict(zip(nodes_df["index"], nodes_df["order"]))
-    y_val = dict(zip(nodes_df["index"], nodes_df["f_value"]))
-    yrange = nodes_df["f_value"].max()-nodes_df["f_value"].min()
-    xrange = nodes_df["order"].max()
+    y_val = dict(zip(nodes_df["index"], mn*nodes_df["f_value"]))
+    # yrange = nodes_df["f_value"].max()-nodes_df["f_value"].min()
+    # xrange = nodes_df["order"].max()
 
     saddle_label_added = False
     minima_label_added = False
@@ -193,10 +199,10 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, tx
     # print('x_pos', x_pos)
     # print('nodes_df', nodes_df)
     # print('edges_df', edges_df)
-    markersize=50
-    fontsize=8
-    if 'markersize' in kwargs.keys(): markersize=kwargs['markersize']
-    if 'fontsize' in kwargs.keys(): fontsize=kwargs['fontsize']
+    # markersize=50
+    # fontsize=8
+    # if 'markersize' in kwargs.keys(): markersize=kwargs['markersize']
+    # if 'fontsize' in kwargs.keys(): fontsize=kwargs['fontsize']
 
     # Plot edges:
     for _, row in edges_df.iterrows():
@@ -204,18 +210,21 @@ def plot_saddle_tree_with_function(dataframe, nodes_csv, edges_csv, fig=None, tx
         x1, y1 = x_pos[i] * 2, y_val[i]
         x2, y2 = x_pos[j] * 2, y_val[j]
         ax.plot([x1, x2], [y1, y2], color=edge_color, lw=1)
+        # # eckige branches:
+        # ax.plot([x1, x2], [y1, y1], color=edge_color, lw=1)
+        # ax.plot([x2, x2], [y1, y2], color=edge_color, lw=1)
 
     for idx in nodes_df["index"].to_list():
         x = x_pos[idx] * 2
         y = y_val[idx]
 
         point_type = dataframe.loc[idx, "type"].lower()
+        padx, pady = txt_pads[0], txt_pads[1]
         if point_type == "saddle":
             ax.scatter(x, y, color=saddle_color, edgecolor=edge_color, s=markersize, zorder=3,
                        label="Saddle" if not saddle_label_added else "")
             inv = ax.transData.inverted()
             # pad = -0.15*inv.transform((np.sqrt(markersize/np.pi),np.sqrt(markersize/np.pi)))
-            padx, pady = txt_pads[0], txt_pads[1]
             ax.text(x+padx, y+pady, f"S{idx}", ha="center", va="center",  fontsize=fontsize, color=text_color)
             saddle_label_added = True
         elif point_type == "minimum":

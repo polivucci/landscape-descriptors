@@ -5,9 +5,33 @@ from numpy.linalg import norm as numpynorm
 from numpy import float64 as numpyfloat64
 import pandas as pd
 
-from critical_points.jax_optimizers import optimize_lbfgs
-from critical_points.jax_critical_point_finder import run_local_search
+from critical_points.optimizers import optimize_lbfgs, optimize_gd
+from critical_points.torch_critical_point_finder import run_local_search
 
+torch.set_printoptions(precision=7, sci_mode=True)
+torch.set_default_dtype(torch.float64)
+
+from critical_points.torch_critical_point_finder import flatten_hessian_blocks
+def compute_model_hessian(model, input, loss_func):
+
+    active_params = [True if p.requires_grad else False for p in model.parameters()]
+    params_flatten, unflatten = torch.utils._pytree.tree_flatten(dict(model.named_parameters()))
+
+    def eval_loss_fn_params(flat_params):
+        """Defines the functional eval of the model given the parameters.
+        Flatten is required for torch.func.hessian to return a 2-tensor and not a nested dict,
+        as function like torch.func.hessian from torch.func expect a single input tensor or PyTree (nested dict) of tensors.
+        and functional calls work with nested dicts (i.e. unflattened).
+        """
+        params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) # see ChatGPT convo
+        y = torch.func.functional_call(model, params_dict, (input,))
+        return loss_func(y)
+
+    hessian = torch.func.hessian(eval_loss_fn_params)(params_flatten)
+    hessian = flatten_hessian_blocks(hessian)
+    hessian = hessian[active_params][:, active_params]
+    
+    return hessian
 
 def offset_near_saddle(saddle_point, model_saddle, input, loss_func, epsilon=0.01):
     """
@@ -40,18 +64,20 @@ def offset_near_saddle(saddle_point, model_saddle, input, loss_func, epsilon=0.0
     
     return offset_points
 
-
 def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
     """ Find closest known minimum and check if within threshold.
     Uses NumPy because of Pandas.
     """
-    x_cols = sorted([col for col in minima_df.columns if col.startswith("x")])
-    dists = minima_df.apply(
-        lambda r: numpynorm(min_point.numpy() - r[x_cols].values.astype(numpyfloat64)),
-        axis=1
-    )
-    closest_idx = dists.idxmin()
-    return minima_df.loc[closest_idx][x_cols].tolist(), dists.min() < threshold, closest_idx
+    if len(minima_df)==0:
+        return None, False, None
+    else:
+        x_cols = sorted([col for col in minima_df.columns if col.startswith("x")])
+        dists = minima_df.apply(
+            lambda r: numpynorm(min_point.numpy() - r[x_cols].values.astype(numpyfloat64)),
+            axis=1
+        )
+        closest_idx = dists.idxmin()
+        return minima_df.loc[closest_idx][x_cols].tolist(), dists.min() < threshold, closest_idx
 
 # TODO: do trajectory lengths without numpy
 # def trajectory_length(traj):
@@ -60,7 +86,12 @@ def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
 #     """
 #     return sum(numpynorm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
 
-def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, input, log_paths=False):
+def trace_from_saddle(saddle_point, minima_df, idx_saddle, 
+                      loss_fn, nn_model, input, 
+                      threshold=1e-2, 
+                      log_paths=False, 
+                      optimizer='lbfgs',
+                      **opt_kwargs): 
     """
     Given a saddle point, trace descent on both sides and match to known minima
     """
@@ -73,35 +104,47 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle, loss_fn, nn_model, in
 
     saddle_value = loss_fn(model_saddle(input)).item() #Get exact saddle value for plotting on tree
 
+    if optimizer=='lbfgs': opt_algo=optimize_lbfgs
+    elif optimizer=='gd': opt_algo=optimize_gd
+    else: print('Optimizer either lbfgs or gd')
+
     result=[]
     connected_minimizers = []
     trajectories = []
     minima_id =[]
-    for offset_coords in offsets:
+    for io, offset_coords in enumerate(offsets):
         #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
         model1 = nn_model(offset_coords)
-        minima1, arrival1_val, traj1 = run_local_search(optimize_lbfgs, model1, input, loss_fn, log_paths=True)   
-        minima1 = minima1[active_params]
-        min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df)   
+        print(f'Offset {io} ')
+        print(offset_coords)
+        minima1, arrival1_val, traj1, conv = run_local_search(opt_algo, model1, input, loss_fn, log_paths=True, **opt_kwargs)
+        print(f'converged: ', conv)
 
         # length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
-        
-        #Making table for results found
-        result.append(
-            {
-                "saddle_point": tuple(saddle_point.tolist()),
-                "saddle_value": saddle_value,
-                "descent":tuple(float(x) for x in minima1), #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
-                "minimizer": tuple(float(x) for x in min1_coords),
-                "min_value": arrival1_val,
-                # "trajectory_length": length1,
-                "is_connected": "yes" if connected1 else "no"
-            }
-        ) 
-        if connected1:
-            connected_minimizers.append(tuple(minima1.tolist()))
-            trajectories.append(traj1)
-            minima_id.append(int(idx_minima1))
+
+        if conv==True:
+            minima1 = minima1[active_params]
+            min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df, threshold=threshold)   
+            if min1_coords is not None: min1_coords = tuple(float(x) for x in min1_coords)
+            
+            #Making table for results found
+            result.append(
+                {
+                    "saddle_point": tuple(saddle_point.tolist()),
+                    "offset" : io, 
+                    "saddle_value": saddle_value,
+                    "descent": minima1, #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
+                    "min_value": arrival1_val,
+                    "minimizer": min1_coords,
+                    "converged": "yes",
+                    # "trajectory_length": length1,
+                    "is_connected": "yes" if connected1 else "no"
+                }
+            ) 
+            if connected1:
+                connected_minimizers.append(tuple(minima1.tolist()))
+                trajectories.append(traj1)
+                minima_id.append(int(idx_minima1))
 
     path_data = None
     if connected_minimizers:
@@ -172,7 +215,7 @@ def extract_connection_indices(all_results, critical_points_df, out_dir='./'):
     df.to_csv(output_file, index=False)
     print(f"Saved {len(df)} connections to {output_file}")
 
-def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, input, return_paths=False):
+def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, input, threshold=1e-2, **opt_kwargs):
     """
     Trace connectivity from saddle points to minima.
 
@@ -193,19 +236,23 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, input, 
     all_results = []
     paths=[]
     for idx, row in saddles_df.iterrows():
+        print() 
+        print('Tracing saddle: ', idx)
         saddle_point = [row[col] for col in sorted(row.index) if col.startswith("x")]
 
-        results, path_data = trace_from_saddle(saddle_point, minima_df, idx, func, nn_model, input, log_paths=return_paths)
+        results, path_data = trace_from_saddle(saddle_point, minima_df, idx, func, nn_model, input, threshold=threshold, **opt_kwargs)
         all_results.extend(results)
         if path_data is not None:
             paths.append(path_data)
+
+    descent_points = [[result["descent"], result["min_value"]] for result in results if result["converged"]=="yes"]
 
     minima = [
         ([row[col] for col in sorted(row.index) if col.startswith("x")], row["f_value"])
         for _, row in minima_df.iterrows()
     ]
 
-    if return_paths:
-        return all_results, minima, dataframe, paths
+    if opt_kwargs['log_paths']:
+        return all_results, minima, dataframe, descent_points, paths
     else:
-        return all_results, minima, dataframe
+        return all_results, minima, dataframe, descent_points
