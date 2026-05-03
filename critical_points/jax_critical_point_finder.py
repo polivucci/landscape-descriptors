@@ -120,8 +120,8 @@ class JAXMinimaFinder:
 
 # JAX gradient descent
 def run_local_search(params, optimizer, optim_step, **optimizer_kwargs):
-    final_point, final_val, path = optimizer(params, optim_step, **optimizer_kwargs)
-    return final_point, final_val, path
+    final_point, final_val, path, conv = optimizer(params, optim_step, **optimizer_kwargs)
+    return final_point, final_val, path, conv
 
 def dict_to_ravelled_array(p: any, d: dict) -> jnp.ndarray:
     """
@@ -151,6 +151,15 @@ def dict_to_ravelled_array(p: any, d: dict) -> jnp.ndarray:
         segments.append(value.ravel())
 
     return jnp.concatenate(segments)
+
+def flat_loss_grad_hess_fns(loss_func, params, input):
+    _, unravel_fn = jax.flatten_util.ravel_pytree(params)
+    def flat_loss(flat_params):
+        params = unravel_fn(flat_params)
+        return loss_func(params, input)
+    grad_fn = jax.grad(flat_loss)
+    hessian_fn = jax.hessian(flat_loss)
+    return flat_loss, grad_fn, hessian_fn
 
 def flatten_bound(bounds, params, which=0):
     # build bounds in the same order as the params dict
@@ -182,7 +191,7 @@ def save_basin_counts_csv(finder, filename="basin_counts.csv", out_dir="."):
     return df
 
 # ---- Main search ----
-from critical_points.jax_optimizers import optimize_lbfgs, lbfgs_step, optimize_newton, newton_step
+from optimizers import optimize_lbfgs, lbfgs_step, optimize_newton, newton_step
 
 def jax_find_critical_points(model_builder, 
                              loss_func, 
@@ -210,14 +219,8 @@ def jax_find_critical_points(model_builder,
     # model_builder now returns a params dict (all active)
     params0 = model_builder(finder.x0s[0])
 
-    # flatten params to 1D vector 
-    flat_params0, unravel_fn = jax.flatten_util.ravel_pytree(params0)
-    # define flat losses
-    def flat_loss(flat_params):
-        params = unravel_fn(flat_params)
-        return loss_func(params, input)
-    grad_fn = jax.grad(flat_loss)
-    hessian_fn = jax.hessian(flat_loss)
+    # flatten params and compute derivatives:
+    flat_loss, grad_fn, hessian_fn = flat_loss_grad_hess_fns(loss_func, params0, input)
 
     # flatten bounds:
     low_bounds = flatten_bound(bounds, params0, which=0)
@@ -225,7 +228,7 @@ def jax_find_critical_points(model_builder,
     optimizer_kwargs['bounds'] = {'low': low_bounds, 'up': upp_bounds}
 
     optimizer=optimize_lbfgs
-    optim_step = lbfgs_step(flat_loss)
+    optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn)
     if not minima_only: 
         optimizer=optimize_newton
         optim_step = newton_step(flat_loss, grad_fn, hessian_fn)
@@ -293,7 +296,7 @@ def save_critical_points_to_csv(minima, maxima, saddles, dimension=2, filename="
     for point_type, points in zip(["minimum", "maximum", "saddle"], [minima, maxima, saddles]):
         for p, fval, index in points:
             vardict = {f"x{i+1}": float(p[i]) for i in range(dimension)}
-            data.append({**vardict, "f_value": float(fval), "type": point_type, "index": index})
+            data.append({**vardict, "f_value": float(fval), "type": point_type, "cp_index": index})
 
     df = pd.DataFrame(data)
     df.to_csv(filename, float_format="%.10f")

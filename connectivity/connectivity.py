@@ -1,67 +1,46 @@
 import os
 
-import torch
 from numpy.linalg import norm as numpynorm
+from numpy import array
 from numpy import float64 as numpyfloat64
 import pandas as pd
 
-from critical_points.optimizers import optimize_lbfgs, optimize_gd
-from critical_points.torch_critical_point_finder import run_local_search
+from optimizers import optimize_lbfgs, lbfgs_step, optimize_gd
+from critical_points.jax_critical_point_finder import run_local_search, flat_loss_grad_hess_fns
 
-torch.set_printoptions(precision=7, sci_mode=True)
-torch.set_default_dtype(torch.float64)
+import jax.numpy as jnp
+from typeconfig import default_dtype
 
-from critical_points.torch_critical_point_finder import flatten_hessian_blocks
-def compute_model_hessian(model, input, loss_func):
-
-    active_params = [True if p.requires_grad else False for p in model.parameters()]
-    params_flatten, unflatten = torch.utils._pytree.tree_flatten(dict(model.named_parameters()))
-
-    def eval_loss_fn_params(flat_params):
-        """Defines the functional eval of the model given the parameters.
-        Flatten is required for torch.func.hessian to return a 2-tensor and not a nested dict,
-        as function like torch.func.hessian from torch.func expect a single input tensor or PyTree (nested dict) of tensors.
-        and functional calls work with nested dicts (i.e. unflattened).
-        """
-        params_dict = torch.utils._pytree.tree_unflatten(flat_params, unflatten) # see ChatGPT convo
-        y = torch.func.functional_call(model, params_dict, (input,))
-        return loss_func(y)
-
-    hessian = torch.func.hessian(eval_loss_fn_params)(params_flatten)
-    hessian = flatten_hessian_blocks(hessian)
-    hessian = hessian[active_params][:, active_params]
-    
-    return hessian
-
-def offset_near_saddle(saddle_point, model_saddle, input, loss_func, epsilon=0.01):
+def offset_near_saddle(saddle_point, hessian, epsilon=0.01):
     """
-    Offset the saddle point along its most unstable direction,
-    scaled by radius of curvature (1 / |eigenvalue|).
+    Offset the saddle point along its unstable directions (eigval < 0), 
+    scaled by radius of curvature (1 / |eigval|). 
     """
 
-    point = saddle_point.clone().detach().unsqueeze(1)
-
-    # Compute Hessian
-    hessian = compute_model_hessian(model_saddle, input, loss_func).detach()
+    point = saddle_point[..., jnp.newaxis]  # unsqueeze(1)
 
     # Eigendecomposition
-    eigvals, eigvecs = torch.linalg.eigh(hessian)
-    
+    eigvals, eigvecs = jnp.linalg.eigh(hessian)
+
     # Get negative eigenvalues and their eigenvectors (unstable directions)
-    unstable_idx = (eigvals<0)
-    unstable_eigval = eigvals[unstable_idx]
-    unstable_direction = eigvecs[:, unstable_idx]
+    unstable_mask = eigvals < 0
+    unstable_eigval = eigvals[unstable_mask]
+    unstable_direction = eigvecs[:, unstable_mask]
 
     # Radius of curvature = 1 / |λ|
-    radius_of_curvature = 1.0 / torch.abs(unstable_eigval)
+    radius_of_curvature = 1.0 / jnp.abs(unstable_eigval)
 
     # Offset distance = ε * radius_of_curvature
-    offset_distance = (epsilon * radius_of_curvature).unsqueeze(0)
+    offset_distance = (epsilon * radius_of_curvature)[jnp.newaxis, :]  # unsqueeze(0)
 
     # Offset along unstable directions
-    direction = unstable_direction / torch.norm(unstable_direction, dim=0, keepdim=True)
-    offset_points = torch.cat((point + offset_distance * direction, point - offset_distance * direction), dim=1).T
-    
+    direction = unstable_direction / jnp.linalg.norm(unstable_direction, axis=0, keepdims=True)
+    offset_points = jnp.concatenate(
+        (point + offset_distance * direction,
+         point - offset_distance * direction),
+        axis=1
+    ).T
+
     return offset_points
 
 def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
@@ -73,7 +52,7 @@ def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
     else:
         x_cols = sorted([col for col in minima_df.columns if col.startswith("x")])
         dists = minima_df.apply(
-            lambda r: numpynorm(min_point.numpy() - r[x_cols].values.astype(numpyfloat64)),
+            lambda r: numpynorm(array(min_point) - r[x_cols].values.astype(numpyfloat64)),
             axis=1
         )
         closest_idx = dists.idxmin()
@@ -86,27 +65,25 @@ def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
 #     """
 #     return sum(numpynorm(traj[i] - traj[i-1]) for i in range(1, len(traj)))
 
-def trace_from_saddle(saddle_point, minima_df, idx_saddle, 
-                      loss_fn, nn_model, input, 
+def trace_from_saddle(saddle_point, 
+                      minima_df, 
+                      idx_saddle, 
+                      opt_algo,
+                      optim_step, 
+                      loss_fn,
+                      hess_fn,
                       threshold=1e-2, 
                       log_paths=False, 
-                      optimizer='lbfgs',
                       **opt_kwargs): 
     """
     Given a saddle point, trace descent on both sides and match to known minima
     """
     
-    saddle_point = torch.tensor(saddle_point)
-    model_saddle = nn_model(saddle_point)
-    active_params = [True if p.requires_grad else False for p in model_saddle.parameters()]
+    saddle_value = loss_fn(saddle_point)
+    hessian = hess_fn(saddle_point)
 
-    offsets = offset_near_saddle(saddle_point, model_saddle, input, loss_fn, epsilon=0.01) 
-
-    saddle_value = loss_fn(model_saddle(input)).item() #Get exact saddle value for plotting on tree
-
-    if optimizer=='lbfgs': opt_algo=optimize_lbfgs
-    elif optimizer=='gd': opt_algo=optimize_gd
-    else: print('Optimizer either lbfgs or gd')
+    # create offset points (along unstable )
+    offsets = offset_near_saddle(saddle_point, hessian, epsilon=0.01) 
 
     result=[]
     connected_minimizers = []
@@ -114,17 +91,20 @@ def trace_from_saddle(saddle_point, minima_df, idx_saddle,
     minima_id =[]
     for io, offset_coords in enumerate(offsets):
         #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
-        model1 = nn_model(offset_coords)
-        print(f'Offset {io} ')
-        print(offset_coords)
-        minima1, arrival1_val, traj1, conv = run_local_search(opt_algo, model1, input, loss_fn, log_paths=True, **opt_kwargs)
+        print(f'Offset {io}:', offset_coords)
+        minima1, arrival1_val, traj1, conv = run_local_search(offset_coords, 
+                                                              opt_algo, 
+                                                              optim_step, 
+                                                              log_paths=log_paths, 
+                                                              **opt_kwargs)
         print(f'converged: ', conv)
 
         # length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
 
         if conv==True:
-            minima1 = minima1[active_params]
-            min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, minima_df, threshold=threshold)   
+            min1_coords, connected1, idx_minima1 = compare_to_known_minima(minima1, 
+                                                                           minima_df, 
+                                                                           threshold=threshold)   
             if min1_coords is not None: min1_coords = tuple(float(x) for x in min1_coords)
             
             #Making table for results found
@@ -182,12 +162,11 @@ def save_descent_paths(paths, out_dir='./'):
             filepath = os.path.join(out_dir, filename)
             df.to_csv(filepath, index=False)
 
-def extract_connection_indices(all_results, critical_points_df, out_dir='./'):
+def extract_connection_indices(all_results, critical_points_df):
     """
     From all_results, generate a CSV with index_saddle and index_minimum
     corresponding to connected pairs in the original critical_points.csv
     """
-    os.makedirs(out_dir, exist_ok=True)
     
     # Create a mapping from (x1, x2)or(x1, x2, x3) → index in critical_points.csv
     x_cols = sorted([col for col in critical_points_df.columns if col.startswith("x")])
@@ -196,8 +175,7 @@ def extract_connection_indices(all_results, critical_points_df, out_dir='./'):
         tuple(round(row[col], 8) for col in x_cols): idx
         for idx, row in critical_points_df.iterrows()
     }
-    dim = len(x_cols)
-    output_file=f'{out_dir}/connectivity_graph.csv'
+
     connection_rows = []
     for entry in all_results:
         if entry["is_connected"] == "yes":
@@ -210,12 +188,15 @@ def extract_connection_indices(all_results, critical_points_df, out_dir='./'):
             if idx_saddle is not None and idx_minima is not None:
                 connection_rows.append((idx_saddle, idx_minima))
 
-    # Save to CSV
     df = pd.DataFrame(connection_rows, columns=["index_1", "index_2"])
-    df.to_csv(output_file, index=False)
-    print(f"Saved {len(df)} connections to {output_file}")
+    
+    return df
 
-def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, input, threshold=1e-2, **opt_kwargs):
+def trace_connectivity(saddles_df, minima_df, dataframe, 
+                       func, model_builder, input, 
+                       threshold=1e-2, 
+                       optimizer='lbfgs',
+                       **opt_kwargs):
     """
     Trace connectivity from saddle points to minima.
 
@@ -233,19 +214,43 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, input, 
         dataframe: passed-through dataframe.
         paths (optional): list of descent path data, if return_paths=True.
     """
+
+    idx, pms = list(saddles_df.iterrows())[0]
+    pms = [pms[col] for col in sorted(pms.index) if col.startswith("x")]
+    pms = jnp.array(pms, dtype=default_dtype)
+    pms0 = model_builder(pms)
+    flat_loss, grad_fn, hess_fn = flat_loss_grad_hess_fns(func, pms0, input)
+
+    if optimizer=='lbfgs':
+        opt_algo=optimize_lbfgs
+        optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn)
+    elif optimizer=='gd': 
+        opt_algo=optimize_gd
+        optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn)
+    else: print('Optimizer either lbfgs or gd')
+
     all_results = []
     paths=[]
     for idx, row in saddles_df.iterrows():
         print() 
         print('Tracing saddle: ', idx)
         saddle_point = [row[col] for col in sorted(row.index) if col.startswith("x")]
+        saddle_point = jnp.array(saddle_point, dtype=default_dtype)
 
-        results, path_data = trace_from_saddle(saddle_point, minima_df, idx, func, nn_model, input, threshold=threshold, **opt_kwargs)
+        results, path_data = trace_from_saddle(saddle_point, 
+                                               minima_df, 
+                                               idx, 
+                                               opt_algo, 
+                                               optim_step,
+                                               flat_loss,
+                                               hess_fn,
+                                               threshold=threshold, 
+                                               **opt_kwargs)
         all_results.extend(results)
         if path_data is not None:
             paths.append(path_data)
 
-    descent_points = [[result["descent"], result["min_value"]] for result in results if result["converged"]=="yes"]
+    # descent_points = [[result["descent"], result["min_value"]] for result in results if result["converged"]=="yes"]
 
     minima = [
         ([row[col] for col in sorted(row.index) if col.startswith("x")], row["f_value"])
@@ -253,6 +258,6 @@ def trace_connectivity(saddles_df, minima_df, dataframe, func, nn_model, input, 
     ]
 
     if opt_kwargs['log_paths']:
-        return all_results, minima, dataframe, descent_points, paths
+        return all_results, minima, dataframe, paths
     else:
-        return all_results, minima, dataframe, descent_points
+        return all_results, minima, dataframe, 

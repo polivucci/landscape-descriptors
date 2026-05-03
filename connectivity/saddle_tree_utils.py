@@ -83,81 +83,6 @@ def _filter_neighbors_min_value(dict3, dict_values):
     
     return dict4, all_keys
 
-# def build_extra_edges(minima_to_saddles, saddle_to_minima, saddle_y_values):
-#     extra_edges = set()     # tidy unique elements and lookup operations
-
-#     # connect each minimum only to its lowest saddle
-#     minima_to_saddles_pruned = dict.fromkeys(minima_to_saddles.keys(),[]) # empty dict with same minima
-#     for minimum, saddle_list in minima_to_saddles.items():
-#         min_val = min([
-#             saddle_y_values[n] for n in saddle_list
-#         ])
-#         lowest_saddles = [
-#             n for n in saddle_list if saddle_y_values[n] == min_val
-#         ]
-#         minima_to_saddles_pruned[minimum] = lowest_saddles
-#         # print('minima_to_saddles_pruned', len(minima_to_saddles_pruned[minimum]) )
-
-#     # for each saddle, find its higher neighbours
-#     saddle_neighbors = _build_neighbors_dict(saddle_to_minima)  # find its neighbours (saddles that share a minimum)
-#     higher_neighbors = _filter_neighbors_value(saddle_neighbors, saddle_y_values)
-
-#     # find the lowest among its higher neighbours
-#     lowest_higher_neighbors, kept_saddles = _filter_neighbors_min_value(higher_neighbors, saddle_y_values)
-
-#     # print('tot_saddles', len(saddle_to_minima.keys()))
-#     # print('kept_saddles', len(kept_saddles))
-#     # print('lowest_higher_neighbors', lowest_higher_neighbors)
-
-#     # connect
-#     all_edges = {**minima_to_saddles_pruned, **lowest_higher_neighbors}
-#     all_nodes = list(minima_to_saddles.keys()) + list(kept_saddles)
-#     pairs = {(k2, k1) for k2, neighbors in all_edges.items() for k1 in neighbors}
-#     for pair in pairs:
-#         edge = tuple(sorted(pair))
-#         extra_edges.add(edge)
-
-#     return extra_edges, all_nodes
-
-# def build_extra_edges(minima_to_saddles, unique_saddles, saddle_y_values):
-#     extra_edges = set()
-#     saddle_neighbors = {s: set() for s in unique_saddles}
-#     for saddle_list in minima_to_saddles.values():
-#         if len(saddle_list) >= 2:
-#             max_val = max([
-#                 saddle_y_values[n] for n in saddle_list
-#             ])
-#             highest_saddle = [
-#                 n for n in saddle_list if saddle_y_values[n] >= max_val
-#             ]
-#             for s2 in saddle_list:
-#                 if s2!=highest_saddle[0]:
-#                     edge = tuple(sorted((highest_saddle[0], s2)))
-#                     extra_edges.add(edge)
-#                     saddle_neighbors[highest_saddle[0]].add(s2)
-#                     saddle_neighbors[s2].add(highest_saddle[0])
-
-#     for s in unique_saddles:
-#         s_val = saddle_y_values[s]
-#         higher_neighbors = [
-#             n for n in saddle_neighbors[s] if saddle_y_values[n] >= s_val
-#         ]
-#         print('s_val', s_val)
-#         print('higher_neighbors', higher_neighbors)
-#         if len(higher_neighbors) >= 2:
-#             max_val = max([
-#                 saddle_y_values[n] for n in higher_neighbors
-#             ])
-#             highest_neighbour = [
-#                 n for n in higher_neighbors if saddle_y_values[n] >= max_val
-#             ]
-#             for s2 in higher_neighbors:
-#                 if s2!=highest_neighbour[0]:
-#                     edge = tuple(sorted((highest_neighbour[0], s2)))
-#                     extra_edges.add(edge)
-
-#     return extra_edges
-
 def build_extra_edges(minima_to_saddles, unique_saddles, saddle_y_values):
     extra_edges = set()
     saddle_neighbors = {s: set() for s in unique_saddles}
@@ -227,30 +152,6 @@ def nonzero_indices(arr: np.ndarray) -> np.ndarray:
 def compute_mst(weight_matrix):
     mst_sparse = minimum_spanning_tree(weight_matrix)
     return np.array(mst_sparse.nonzero()).T
-
-# def dfs_layout(tree_adj, node, unique_minima, f_values, visited, x_pos, counter, parent=None):
-#     visited.add(node)
-#     # print(visited)
-#     children = [n for n in tree_adj[node] if n != parent]
-#     if node in unique_minima:
-#         x_pos[node] = counter[0]
-#         counter[0] += 1
-#         return x_pos[node]
-#     child_xs = [dfs_layout(tree_adj, child, unique_minima, f_values, visited, x_pos, counter, node) for child in children]
-#     x_pos[node] = sum(child_xs) / len(child_xs) if child_xs else counter[0]
-#     return x_pos[node]
-
-# def bfs_layout(tree_adj, node, unique_minima, f_values, visited, x_pos, counter, parent=None):
-#     visited.add(node)
-#     # print(visited)
-#     children = [n for n in tree_adj[node] if n != parent]
-#     if node in unique_minima:
-#         x_pos[node] = counter[0]
-#         counter[0] += 1
-#         return x_pos[node]
-#     child_xs = [bfs_layout(tree_adj, child, unique_minima, f_values, visited, x_pos, counter, node) for child in children]
-#     x_pos[node] = sum(child_xs) / len(child_xs) if child_xs else counter[0]
-#     return x_pos[node]
 
 def spread_x_positions(x_pos, min_sep=0.3):
     # Prevent exact overlaps by nudging x positions
@@ -354,26 +255,19 @@ def map_coords_to_indices(critical_points_df):
 
     return all_nodes, all_values, all_types, index_map
 
-def save_tree_nodes_csv(
-    index_map, all_values, dfs_order_list, out_dir='./'
-):
-    output_file=out_dir+"tree_nodes.csv"
+def get_tree_nodes(index_map, all_values, dfs_order_list):
     rows = []
     for order_idx, internal_idx in enumerate(dfs_order_list):
         f_val = all_values[internal_idx]
         rows.append((index_map[internal_idx], f_val, order_idx))
 
     df = pd.DataFrame(rows, columns=["index", "f_value", "order"])
-    df.to_csv(output_file, index=False)
-    print(f"Saved node order to {output_file}")
+    return df
 
-
-def save_tree_edges_csv(mst_edges, ids, out_dir='./'):
-    output_file=out_dir+"tree_connectivity.csv"
+def get_tree_edges(mst_edges, ids):
     rows = [(ids[i], ids[j]) for i, j in mst_edges]
     df = pd.DataFrame(rows, columns=["index_1", "index_2"])
-    df.to_csv(output_file, index=False)
-    print(f"Saved tree edges to {output_file}")
+    return df
 
 
 import collections

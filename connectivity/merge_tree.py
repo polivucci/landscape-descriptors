@@ -1,19 +1,23 @@
-# --- Constants (Inferred from C++ context) ---
-# Critical Point Types
+# critical point types
 SADDLE = 'saddle'
 MINIMUM = 'minimum'
 MAXIMUM =  'maximum'
 
+
 class MergeTree:
     """
     A class implementing the Join Tree (Merge Tree for sublevel sets) algorithm.
-    It utilizes a Disjoint Set Union (DSU) structure to manage component merging
-    and build the structure of the tree.
-    
-    The critical point types are provided as input, simplifying the classification logic.
+
+    See the article: 
+    Carr, H.; Snoeyink, J. and Axen, U. "Computing contour trees in all dimensions" 
+    Comput. Geom., 2003
+    http://aperture.stanford.edu/courses/cs468-03-winter/Papers/carr-contour-soda.pdf 
     """
 
-    def __init__(self, sorted_vertices: list[int], neighbor_map: dict[int, list[int]], critical_points_map: dict[int, int]):
+    def __init__(self, 
+                 sorted_vertices: list[int], 
+                 neighbor_map: dict[int, list[int]], 
+                 critical_points_map: dict[int, int]):
         """
         Initializes the MergeTree with actual input data.
         
@@ -30,48 +34,43 @@ class MergeTree:
         self.neighbor_map = neighbor_map
         self.no_vertices = len(self.sv)
         
-        # Critical Points (critical_pts): Directly loaded from the input map.
+        # Critical Points loaded from the input map.
         # All vertices in self.sv are assumed to be present in this map.
         self.critical_pts = critical_points_map
         
-        # --- Pre-computation for O(1) function value comparison ---
+        # pre-compute function values for O(1) comparison ---
         # Map vertex ID to its index in the sorted list (function value rank)
         self._vertex_rank = {v: i for i, v in enumerate(self.sv)}
 
-        # --- DSU and Tree Structure Initialization ---
-        
-        # DSU structure (nodes in C++): self.parent[i] stores the parent of vertex i.
+        # Tree Initialization 
+        # Disjoint set union (DSU) structure: self.parent[i] stores the parent of vertex i.
         max_vertex_id = max(self.sv) if self.sv else -1
         # Initialize DSU: each vertex is its own component.
         self.parent = list(range(max_vertex_id + 1))
         
-        # cpMap: Maps component representative (root of DSU) to the actual critical point vertex.
-        # This tracks the active critical point for each component during processing.
+        # cp_map maps component representative (root of DSU) to the actual critical point vertex.
+        # this tracks the active critical point for each component during processing.
         self.cp_map = {}
         
-        # prev: Maps a component's critical point (to) to the vertex (from) that merged it. (Tree edges)
+        # prev: maps a component's critical point to the vertex that merged it. (Tree edges)
         self.prev = {}
             
         # Member variables that are set by the computation (initializing to default values)
         self.new_root = -1
 
-    # --- Data Access Helpers ---
-    
     def get_star(self, v: int) -> list[int]:
-        """Returns the list of neighbors for vertex v (C++ data->getStar)."""
+        """Returns the list of neighbors for vertex v.
+        """
         return self.neighbor_map.get(v, [])
 
     def is_upper_link(self, v1: int, v2: int) -> bool:
-        """
-        Checks if f(v1) < f(v2) (C++ data->lessThan(v1, v2)).
+        """Checks if f(v1) < f(v2).
         A higher rank (index) in self.sv means a higher function value.
         """
         return self._vertex_rank.get(v1, -1) < self._vertex_rank.get(v2, -1)
 
-    # --- DSU (Disjoint Set Union) Implementation for 'nodes' ---
-
     def find(self, i: int) -> int:
-        """DSU Find operation with path compression."""
+        """DSU find operation with path compression."""
         # Ensure the vertex ID is valid and not already a root
         if i >= len(self.parent) or self.parent[i] == i:
             return i
@@ -89,13 +88,10 @@ class MergeTree:
             return True
         return False
 
-    # --- Ported Core Functions ---
-
     def process_vertex(self, v: int):
+        """Finds and merges components and creates tree edges.
         """
-        Port of the C++ 'void MergeTree::processVertex(int64_t v)' function.
-        Focuses on component finding, merging, and tree edge creation.
-        """
+
         star_neighbors = self.get_star(v)
         
         if not star_neighbors: 
@@ -111,7 +107,7 @@ class MergeTree:
 
         # Case 1: No upper links
         if not set_of_components: 
-            # Establish v as the Critical Point (CP) for its component.
+            # Establish v as the CP for its component.
             comp_v = self.find(v)
             self.cp_map[comp_v] = v
         
@@ -119,7 +115,7 @@ class MergeTree:
         else:
             # Merge all connected upper components into the component of v
             for comp in set_of_components:
-                # Find the critical point (CP) of the component being merged (the child node)
+                # Find the CP of the component being merged (the child node)
                 to_vertex = self.cp_map.get(comp)
                 
                 # If a valid CP exists for the component, create a tree edge
@@ -136,9 +132,7 @@ class MergeTree:
             self.cp_map[comp_v_new] = v
 
     def compute_join_tree(self):
-        """
-        Port of the C++ 'void MergeTree::computeJoinTree()' function.
-        Processes vertices in reverse sorted order (high function value to low function value).
+        """ Processes vertices in reverse sorted order (high function value to low function value).
         """
         print("Computing Join Tree...")
         
@@ -152,14 +146,18 @@ class MergeTree:
             v = self.sv[i]
             self.process_vertex(v)
         
-        # Finalizing root (last part of original C++ function)
+        # Finalizing root 
         in_idx = 0
 
         self.new_root = in_idx
         print(f"Setting new_root index = {self.new_root}")
+    
+    def tree_adjacency_list(self):
+        return [[k, v] for k, v in self.prev.items()]
+
 
 def neighbours_from_adjacency(input_edge_list, input_sorted_vertices):
-    """Work out input_neighbor_map from input_edge_list (Adjacency List Construction) ---
+    """Works out input_neighbor_map from input_edge_list (Adjacency List construction) 
     """
     all_vertices = set(input_sorted_vertices) 
     # Use sets to automatically handle bidirectional edges and avoid duplicates
@@ -175,6 +173,7 @@ def neighbours_from_adjacency(input_edge_list, input_sorted_vertices):
     # Convert sets back to lists for the final map structure
     input_neighbor_map = {k: list(v) for k, v in input_neighbor_map_sets.items()}
     return input_neighbor_map
+
 
 # --- Example Usage for Testing ---
 if __name__ == "__main__":
