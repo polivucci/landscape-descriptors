@@ -42,7 +42,7 @@ class JAXMinimaFinder:
     def generate_starting_points(self):
         sampler = Sobol(d=self.dimension, scramble=True, seed=self.seed)
         x0s = sampler.random(self.m)                      # numpy array, shape (m, dimension)
-        self.x0s = jnp.array(x0s)                         # convert to JAX array
+        self.x0s = jnp.array(x0s, dtype=default_dtype)                         # convert to JAX array
         self.x0s = self.x0s * self.ranges + self.low_bounds
         return self
 
@@ -140,7 +140,8 @@ def dict_to_ravelled_array(p: any, d: dict) -> jnp.ndarray:
     """
     segments = []
     for path, leaf in jax.tree_util.tree_leaves_with_path(p):
-        key = jax.tree_util.keystr(path, simple=True)          # e.g. ".w", ".b", "[0]"
+        key = jax.tree_util.keystr(path, simple=True, separator='.')          # e.g. ".w", ".b", "[0]"
+        if key not in d.keys(): continue
         value = jnp.asarray(d[key])
         # Preserve the leaf's shape so sizes stay consistent with ravel_pytree
         if value.shape != jnp.asarray(leaf).shape:
@@ -152,11 +153,9 @@ def dict_to_ravelled_array(p: any, d: dict) -> jnp.ndarray:
 
     return jnp.concatenate(segments)
 
-def flat_loss_grad_hess_fns(loss_func, params, input):
-    _, unravel_fn = jax.flatten_util.ravel_pytree(params)
+def flat_loss_grad_hess_fns(loss_func, input):
     def flat_loss(flat_params):
-        params = unravel_fn(flat_params)
-        return loss_func(params, input)
+        return loss_func(flat_params, input)
     grad_fn = jax.grad(flat_loss)
     hessian_fn = jax.hessian(flat_loss)
     return flat_loss, grad_fn, hessian_fn
@@ -167,14 +166,17 @@ def flatten_bound(bounds, params, which=0):
     flat_bounds = dict_to_ravelled_array(params, bounds)
     return flat_bounds
 
-@jax.jit
-def _jax_critical_point_index(hessian, tol=1e-9):
+def critical_point_index_fn(hessian_fn, tol=1e-9):
     """Returns -1 as a traced value, not a Python int for JIT-compatibility.
     """
-    eigvals = jnp.linalg.eigvalsh(hessian)
-    near_zero = ((eigvals > -tol) & (eigvals < tol)).any()
-    index = (eigvals < -tol).sum()
-    return jnp.where(near_zero, -1, index)
+    @jax.jit
+    def critical_point_index(final_point):
+        hessian = hessian_fn(final_point)
+        eigvals = jnp.linalg.eigvalsh(hessian)
+        near_zero = ((eigvals > -tol) & (eigvals < tol)).any()
+        index = (eigvals < -tol).sum()
+        return jnp.where(near_zero, -1, index)
+    return critical_point_index
 
 def save_basin_counts_csv(finder, filename="basin_counts.csv", out_dir="."):
     rows = []
@@ -191,7 +193,7 @@ def save_basin_counts_csv(finder, filename="basin_counts.csv", out_dir="."):
     return df
 
 # ---- Main search ----
-from optimizers import optimize_lbfgs, lbfgs_step, optimize_newton, newton_step
+from optimizers import optimize_lbfgs, optimize_gd, lbfgs_step, optimize_newton, newton_step
 
 def jax_find_critical_points(model_builder, 
                              loss_func, 
@@ -203,6 +205,7 @@ def jax_find_critical_points(model_builder,
                              min_distance=0.01, 
                              seed=42,
                              resume_df=None, 
+                             skip_points=None,
                              **optimizer_kwargs):
     """
     Finds critical points using JAX.
@@ -216,54 +219,58 @@ def jax_find_critical_points(model_builder,
 
     minima, maxima, saddles = [], [], []
 
-    # model_builder now returns a params dict (all active)
-    params0 = model_builder(finder.x0s[0])
 
     # flatten params and compute derivatives:
-    flat_loss, grad_fn, hessian_fn = flat_loss_grad_hess_fns(loss_func, params0, input)
+    flat_loss, grad_fn, hessian_fn = flat_loss_grad_hess_fns(loss_func, input)
 
     # flatten bounds:
+    params0 = model_builder(finder.x0s[0]) # model_builder returns active params pytree
     low_bounds = flatten_bound(bounds, params0, which=0)
     upp_bounds = flatten_bound(bounds, params0, which=1)
     optimizer_kwargs['bounds'] = {'low': low_bounds, 'up': upp_bounds}
 
-    optimizer=optimize_lbfgs
-    optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn)
-    if not minima_only: 
+    if minima_only=='gd':
+        optimizer=optimize_gd
+        optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn)
+    if minima_only=='lbfgs':
+        optimizer=optimize_lbfgs
+        optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn)
+    if not minima_only:
         optimizer=optimize_newton
         optim_step = newton_step(flat_loss, grad_fn, hessian_fn)
+    
+    critical_point_index = critical_point_index_fn(hessian_fn)
+    
+    if skip_points is None: skip_points = lambda i: False
 
     for i, x0 in enumerate(finder.x0s):
-        # if (i+1)!=325: continue
+        if skip_points(i): continue
         print()
         print('__________________________________________________________________________________________')
         print(f"Attempt {i+1}/{finder.m}:")
         print(f"Starting point: {x0}")
 
-        # initialize model params 
-        params = model_builder(x0)
-        flat_params, _ = jax.flatten_util.ravel_pytree(params)
-        flat_params = jnp.array(flat_params, dtype=default_dtype)
+        # # initialize model params 
+        # params = model_builder(x0)
+        # flat_params, _ = jax.flatten_util.ravel_pytree(params)
+        # flat_params = jnp.array(flat_params, dtype=default_dtype)
 
         # run optimizer
-        final_point, final_val, path = run_local_search(flat_params, optimizer, optim_step, **optimizer_kwargs)
-        grad = grad_fn(final_point)
+        final_point, final_val, path, conv = run_local_search(x0, optimizer, optim_step, **optimizer_kwargs)
 
-        print(f"Arrival point: {final_point}")
-        print('check grad:', grad)
-
-        # check grad is small and final_point is new
-        gradtol = 1e-5 or optimizer_kwargs['gradtol']
-        gradnorm = jnp.linalg.norm(grad)
+        # check convergence and final_point is new
+        gradtol = optimizer_kwargs['gradtol'] or 1e-5
         critical=False
-        if gradnorm<gradtol:             
+        if conv:             
+            grad = grad_fn(final_point)
+            gradnorm = jnp.linalg.norm(grad)
+            # print('check grad:', grad)
             print(f"Converged to critical point with ||grad||={gradnorm:.2e} < {gradtol}")          
             critical = finder.add_minimum(final_point, float(final_val)) 
 
         # classify critical point
         if critical:
-            hessian = hessian_fn(final_point)
-            index = _jax_critical_point_index(hessian)
+            index = critical_point_index(final_point)
             
             if index == 0:
                 minima.append((final_point, final_val, index))
@@ -276,7 +283,7 @@ def jax_find_critical_points(model_builder,
                 print("Type: saddle")
 
     # if searching minima only, compute minima and basin stats:
-    if minima_only==True:
+    if minima_only!=False:
         print("\n=== Basin Stats ===")
         basin_stats, total_converged = finder.get_basin_stats()
         print(f"Total new distinct minima found: {len(basin_stats)}")

@@ -11,13 +11,16 @@ def lbfgs_step(flat_loss, grad_fn=None):
     else:
         def val_and_grad_fn(p, state=None): return (flat_loss(p), grad_fn(p)) 
 
-    # @jax.jit
     @functools.partial(jax.jit, static_argnames=["optimizer"])
     def train_step(flat_params, opt_state, optimizer):
         loss, grads = val_and_grad_fn(flat_params, state=opt_state)
         updates, opt_state = optimizer.update(
             grads, opt_state, flat_params, value=loss, grad=grads, value_fn=flat_loss
         )
+
+        # TODO: here apply periodicity mask
+        # updates = make_periodic(updates)
+
         return updates, loss, opt_state
     
     return train_step
@@ -26,7 +29,8 @@ def optimize_lbfgs(flat_params,
                    optim_step, 
                    bounds=None,
                    lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5, 
-                   log_paths=False):
+                   log_paths=False,
+                   **kwargs):
     """
     Optimize using Optax's LBFGS to find local loss minimum.
 
@@ -50,11 +54,10 @@ def optimize_lbfgs(flat_params,
         for it in range(max_iter):
             updates, loss, opt_state = optim_step(flat_params, opt_state, optimizer)
 
-            flat_params = optax.apply_updates(flat_params, updates)
-
-            if log_paths:    # flatten params to 1D vector 
-
+            if log_paths:   
                 trajectory.append((flat_params, float(loss)))
+
+            flat_params = optax.apply_updates(flat_params, updates)
 
             # stopping criterion
             if jnp.allclose(flat_params, prev_params, atol=atol, rtol=rtol):
@@ -79,7 +82,8 @@ def optimize_gd(flat_params,
                 optim_step, 
                 bounds=None,
                 lr=1e-3, max_iter=100, atol=1e-6, rtol=1e-5, 
-                log_paths=False):
+                log_paths=False,
+                **kwargs):
     """
     Optimize using Optax's SGD to find local loss minimum.
 

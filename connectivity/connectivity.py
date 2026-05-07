@@ -193,7 +193,8 @@ def extract_connection_indices(all_results, critical_points_df):
     return df
 
 def trace_connectivity(saddles_df, minima_df, dataframe, 
-                       func, model_builder, input, 
+                       func,
+                       input, 
                        threshold=1e-2, 
                        optimizer='lbfgs',
                        **opt_kwargs):
@@ -218,8 +219,8 @@ def trace_connectivity(saddles_df, minima_df, dataframe,
     idx, pms = list(saddles_df.iterrows())[0]
     pms = [pms[col] for col in sorted(pms.index) if col.startswith("x")]
     pms = jnp.array(pms, dtype=default_dtype)
-    pms0 = model_builder(pms)
-    flat_loss, grad_fn, hess_fn = flat_loss_grad_hess_fns(func, pms0, input)
+    
+    flat_loss, grad_fn, hess_fn = flat_loss_grad_hess_fns(func, input)
 
     if optimizer=='lbfgs':
         opt_algo=optimize_lbfgs
@@ -250,7 +251,7 @@ def trace_connectivity(saddles_df, minima_df, dataframe,
         if path_data is not None:
             paths.append(path_data)
 
-    # descent_points = [[result["descent"], result["min_value"]] for result in results if result["converged"]=="yes"]
+    descent_points = [[result["descent"], result["min_value"]] for result in results if result["converged"]=="yes"]
 
     minima = [
         ([row[col] for col in sorted(row.index) if col.startswith("x")], row["f_value"])
@@ -258,6 +259,6 @@ def trace_connectivity(saddles_df, minima_df, dataframe,
     ]
 
     if opt_kwargs['log_paths']:
-        return all_results, minima, dataframe, paths
+        return all_results, minima, dataframe, descent_points, paths
     else:
-        return all_results, minima, dataframe, 
+        return all_results, minima, dataframe, descent_points
