@@ -1,6 +1,6 @@
 # landscape-descriptors
 
-JAX-based tools that implement a topological descriptor of high-dimensional loss landscapes.
+JAX-based tools that construct topological descriptors of a high-dimensional loss landscape.
 
 Mainly intended for use with the JAX-based differentiable simulator from the companion repository  `articulated-swimmers` (soon to be released).
 
