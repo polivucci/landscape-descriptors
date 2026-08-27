@@ -255,13 +255,14 @@ def map_coords_to_indices(critical_points_df):
 
     return all_nodes, all_values, all_types, index_map
 
-def get_tree_nodes(index_map, all_values, dfs_order_list):
+def get_tree_nodes(index_map, all_values, all_types, dfs_order_list):
     rows = []
     for order_idx, internal_idx in enumerate(dfs_order_list):
         f_val = all_values[internal_idx]
-        rows.append((index_map[internal_idx], f_val, order_idx))
+        idx_type = all_types[internal_idx]
+        rows.append((index_map[internal_idx], f_val, order_idx, idx_type))
 
-    df = pd.DataFrame(rows, columns=["index", "f_value", "order"])
+    df = pd.DataFrame(rows, columns=["index", "f_value", "order", "type"])
     return df
 
 def get_tree_edges(mst_edges, ids):

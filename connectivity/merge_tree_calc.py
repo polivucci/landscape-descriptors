@@ -74,6 +74,6 @@ def merge_tree(critical_points_df, connectivity_df):
 
     # write out tree nodes
     # get back to original unsorted node names:
-    tree_nodes_df = get_tree_nodes(sorted_unsorted, all_values, dfs_order_list)
+    tree_nodes_df = get_tree_nodes(sorted_unsorted, all_values, all_types, dfs_order_list)
 
     return tree_nodes_df, tree_adjacency_df

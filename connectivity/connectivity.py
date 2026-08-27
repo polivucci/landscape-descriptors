@@ -5,41 +5,63 @@ from numpy import array
 from numpy import float64 as numpyfloat64
 import pandas as pd
 
-from optimizers import optimize_lbfgs, lbfgs_step, optimize_gd
-from critical_points.jax_critical_point_finder import run_local_search, flat_loss_grad_hess_fns
+from optimizers import optimize_lbfgs, lbfgs_step, optimize_gd, line_search_monotonic
+from critical_points.jax_critical_point_finder import (run_local_search, 
+                                                       flat_loss_grad_hess_fns, 
+                                                       flatten_bound)
 
 import jax.numpy as jnp
 from typeconfig import default_dtype
 
-def offset_near_saddle(saddle_point, hessian, epsilon=0.01):
+def offset_near_saddle(saddle_point, hessian, loss_fn, epsilon=0.01, monotonicity_check=0):
     """
     Offset the saddle point along its unstable directions (eigval < 0), 
     scaled by radius of curvature (1 / |eigval|). 
     """
 
-    point = saddle_point[..., jnp.newaxis]  # unsqueeze(1)
 
-    # Eigendecomposition
+    # eigendecomposition
+    # eigvals, eigvecs = jnp.linalg.eig(hessian)
     eigvals, eigvecs = jnp.linalg.eigh(hessian)
 
-    # Get negative eigenvalues and their eigenvectors (unstable directions)
+    # get negative eigenvalues and their eigenvectors (unstable directions)
     unstable_mask = eigvals < 0
     unstable_eigval = eigvals[unstable_mask]
     unstable_direction = eigvecs[:, unstable_mask]
 
-    # Radius of curvature = 1 / |λ|
+    # radius of curvature = 1 / |λ|
     radius_of_curvature = 1.0 / jnp.abs(unstable_eigval)
 
-    # Offset distance = ε * radius_of_curvature
+    # offset distance = ε * radius_of_curvature
     offset_distance = (epsilon * radius_of_curvature)[jnp.newaxis, :]  # unsqueeze(0)
 
-    # Offset along unstable directions
-    direction = unstable_direction / jnp.linalg.norm(unstable_direction, axis=0, keepdims=True)
-    offset_points = jnp.concatenate(
-        (point + offset_distance * direction,
-         point - offset_distance * direction),
+    # offset along unstable directions
+    offsets = jnp.concatenate(
+        (+ offset_distance * unstable_direction,
+         - offset_distance * unstable_direction),
         axis=1
     ).T
+
+    # point = saddle_point[jnp.newaxis, ...]  # unsqueeze(1)
+
+    # verify monotonic
+    if monotonicity_check>0:
+        offsets_mono = []
+        for oj, offset in enumerate(offsets):
+            print(f'Offset {oj} is monotonic.')
+            _, offset = line_search_monotonic(saddle_point, 
+                                              offset, 
+                                              loss_fn, 
+                                              res=monotonicity_check)
+            offsets_mono.append(offset)
+    else:
+        offsets_mono = offsets
+
+    # offset along unstable directions
+    offset_points = jnp.stack(
+        [saddle_point + om for om in offsets_mono],
+        axis=0
+    )
 
     return offset_points
 
@@ -68,11 +90,14 @@ def compare_to_known_minima(min_point, minima_df, threshold=1e-3):
 def trace_from_saddle(saddle_point, 
                       minima_df, 
                       idx_saddle, 
+                      cp_index,
                       opt_algo,
                       optim_step, 
                       loss_fn,
                       hess_fn,
                       threshold=1e-2, 
+                      offset=1e-2,
+                      monotonicity_check=0,
                       log_paths=False, 
                       **opt_kwargs): 
     """
@@ -83,7 +108,9 @@ def trace_from_saddle(saddle_point,
     hessian = hess_fn(saddle_point)
 
     # create offset points (along unstable )
-    offsets = offset_near_saddle(saddle_point, hessian, epsilon=0.01) 
+    offsets = offset_near_saddle(saddle_point, hessian, loss_fn, epsilon=offset, monotonicity_check=monotonicity_check) 
+
+    assert offsets.shape[0]==2*cp_index
 
     result=[]
     connected_minimizers = []
@@ -91,13 +118,12 @@ def trace_from_saddle(saddle_point,
     minima_id =[]
     for io, offset_coords in enumerate(offsets):
         #Optimzation to find Minima of a Saddle point and Trajectory for offset 1 
-        print(f'Offset {io}:', offset_coords)
+        print(f'\t Offset {io}:', offset_coords.round(5))
         minima1, arrival1_val, traj1, conv = run_local_search(offset_coords, 
                                                               opt_algo, 
                                                               optim_step, 
                                                               log_paths=log_paths, 
                                                               **opt_kwargs)
-        print(f'converged: ', conv)
 
         # length1 = trajectory_length(traj1[0]) #calculating total length of the trajectory for offset 1
 
@@ -113,7 +139,7 @@ def trace_from_saddle(saddle_point,
                     "saddle_point": tuple(saddle_point.tolist()),
                     "offset" : io, 
                     "saddle_value": saddle_value,
-                    "descent": minima1, #Undo Comment if you want to check what minima does the saddle point get after going through LBFG optimizer  
+                    "descent": minima1, 
                     "min_value": arrival1_val,
                     "minimizer": min1_coords,
                     "converged": "yes",
@@ -122,6 +148,7 @@ def trace_from_saddle(saddle_point,
                 }
             ) 
             if connected1:
+                print('Connected to minimum', idx_minima1)
                 connected_minimizers.append(tuple(minima1.tolist()))
                 trajectories.append(traj1)
                 minima_id.append(int(idx_minima1))
@@ -192,10 +219,14 @@ def extract_connection_indices(all_results, critical_points_df):
     
     return df
 
-def trace_connectivity(saddles_df, minima_df, dataframe, 
+def trace_connectivity(saddles_df, minima_df, 
                        func,
+                       model_builder,
                        input, 
+                       bounds,
+                       symmetry=None,
                        threshold=1e-2, 
+                       offset=1e-2,
                        optimizer='lbfgs',
                        **opt_kwargs):
     """
@@ -204,7 +235,6 @@ def trace_connectivity(saddles_df, minima_df, dataframe,
     Parameters:
         saddles_df (pd.DataFrame): DataFrame of saddle points.
         minima_df (pd.DataFrame): DataFrame of minima.
-        dataframe (pd.DataFrame): Critical point index map (e.g. critical_points.csv).
         func (callable): The target function, e.g., schwefel(x[0], x[1]).
         return_paths (bool): Whether to return full descent path data.
         nn_model(Function); any given model
@@ -212,53 +242,73 @@ def trace_connectivity(saddles_df, minima_df, dataframe,
     Returns:
         all_results: list of saddle-to-minima connections.
         minima: list of minima as (coords, f_value) tuples.
-        dataframe: passed-through dataframe.
         paths (optional): list of descent path data, if return_paths=True.
     """
-
-    idx, pms = list(saddles_df.iterrows())[0]
-    pms = [pms[col] for col in sorted(pms.index) if col.startswith("x")]
-    pms = jnp.array(pms, dtype=default_dtype)
     
     flat_loss, grad_fn, hess_fn = flat_loss_grad_hess_fns(func, input)
 
+    # set up bounds:
+    idx, pms = list(saddles_df.iterrows())[0]
+    pms = [pms[col] for col in sorted(pms.index) if col.startswith("x")]
+    pms = jnp.array(pms, dtype=default_dtype)
+    params0 = model_builder(pms) # model_builder returns active params pytree
+    low_bounds = flatten_bound(bounds, params0, which=0)
+    upp_bounds = flatten_bound(bounds, params0, which=1)
+    opt_kwargs['bounds'] = {'low': low_bounds, 'up': upp_bounds}
+
+    # set up x symmetries
+    if symmetry is not None:
+        symmetrize_fn = symmetry
+
+    # set up optimizer:
+    if optimizer=='gd':
+        opt_algo=optimize_gd
+        # optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn, symmetry_fn=symmetrize_fn)
     if optimizer=='lbfgs':
         opt_algo=optimize_lbfgs
-        optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn)
-    elif optimizer=='gd': 
-        opt_algo=optimize_gd
-        optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn)
-    else: print('Optimizer either lbfgs or gd')
+        # optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn, symmetry_fn=symmetrize_fn)
+
+    monotonicity_res = 0
+    if 'monotonicity_res' in opt_kwargs.keys(): monotonicity_res=opt_kwargs.pop('monotonicity_res')
 
     all_results = []
     paths=[]
     for idx, row in saddles_df.iterrows():
+        cpidx = row['cp_index']
         print() 
-        print('Tracing saddle: ', idx)
+        print('Tracing saddle', idx, f'(index {cpidx})')
+
         saddle_point = [row[col] for col in sorted(row.index) if col.startswith("x")]
         saddle_point = jnp.array(saddle_point, dtype=default_dtype)
 
+        # set up step:
+        if optimizer=='gd':
+            optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn, symmetry_fn=symmetrize_fn, monotonicity_res=monotonicity_res)
+        if optimizer=='lbfgs':
+            optim_step = lbfgs_step(flat_loss, grad_fn=grad_fn, symmetry_fn=symmetrize_fn, monotonicity_res=monotonicity_res)
+
+        # minimize from saddle
         results, path_data = trace_from_saddle(saddle_point, 
                                                minima_df, 
                                                idx, 
+                                               cpidx,
                                                opt_algo, 
                                                optim_step,
                                                flat_loss,
                                                hess_fn,
                                                threshold=threshold, 
+                                               offset=offset,
+                                               monotonicity_check=monotonicity_res,
                                                **opt_kwargs)
         all_results.extend(results)
         if path_data is not None:
             paths.append(path_data)
 
-    descent_points = [[result["descent"], result["min_value"]] for result in results if result["converged"]=="yes"]
+    descent_points = [[result["descent"], result["min_value"]] for result in all_results if result["converged"]=="yes"]
 
     minima = [
         ([row[col] for col in sorted(row.index) if col.startswith("x")], row["f_value"])
         for _, row in minima_df.iterrows()
     ]
 
-    if opt_kwargs['log_paths']:
-        return all_results, minima, dataframe, descent_points, paths
-    else:
-        return all_results, minima, dataframe, descent_points
+    return all_results, minima, descent_points, paths
