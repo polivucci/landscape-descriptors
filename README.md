@@ -1,5 +1,8 @@
 # landscape-descriptors
 
-Loss landscape descriptors intended for use with the differentiable simulator from the companion repository `articulated-swimmers`.
+JAX-based tools that implement a topological descriptor of high-dimensional loss landscapes.
 
-This is a partial, ongoing JAX conversion of the previous Torch codebase (available at branch `merge-tree-paolo`). 
+Mainly intended for use with the JAX-based differentiable simulator from the companion repository  `articulated-swimmers` (soon to be released).
+
+- `critical_points` contains tools to search the landscape's critical points.
+- `connectivity` contains tools to map the critical points connectivity and construct graph-based descriptors. 
